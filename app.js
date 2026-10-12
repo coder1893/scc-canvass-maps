@@ -37,7 +37,7 @@
   const pollByKey = new Map(polls.map(p => [p.key, p]));
 
   // ------------------------------------------------------------------ state
-  const S = { ps: null, ix: null, shade: 'result', sel: null, sort: null };
+  const S = { ps: null, ix: null, turnout: null, sites: [], vote: 'all', pollView: null, shade: 'result', sel: null, sort: null };
 
   // ------------------------------------------------------------------ map
   const map = L.map('map', { preferCanvas: true, zoomControl: false, minZoom: 12, maxZoom: 20, zoomSnap: 0.5 });
@@ -83,18 +83,20 @@
     { k: 'support', label: 'Supporters ID’d', ps: true },
     { k: 'unknown', label: 'Not yet contacted', ps: true },
     { k: 'find', label: 'Where to canvass', ps: true },
+    { k: 'tovote', label: 'Still to vote', lists: true },
     { k: 'none', label: 'Plain' },
   ];
   const STEPS = {
     support: { color: 'con', breaks: [0.02, 0.05, 0.10, 0.20, 0.35], alpha: [0.06, 0.16, 0.28, 0.42, 0.56, 0.70], get: r => r.supportPct, label: v => pct(v) },
     unknown: { color: 'ramp-contact', breaks: [0.5, 0.7, 0.85, 0.95], alpha: [0.08, 0.2, 0.34, 0.5, 0.66], get: r => r.unknown, label: v => pct(v), quantile: 0.01 },
     find: { color: 'ramp-find', breaks: [25, 50, 100, 200], alpha: [0.08, 0.2, 0.34, 0.5, 0.66], get: r => r.find, label: v => fmt(v), quantile: 10 },
+    tovote: { color: 'ramp-gotv', breaks: [10, 25, 50, 100], alpha: [0.08, 0.2, 0.34, 0.5, 0.66], get: r => r.not, label: v => fmt(v), quantile: 5, src: 'turnout' },
   };
+  const rowFor = (st, key) => st.src === 'turnout' ? turnoutFor(key) : S.ps && S.ps.rows.get(key);
   function setBreaks() {  // quintiles of the loaded polls, rounded, so each class holds about a fifth of the map
-    if (!S.ps) return;
     for (const st of Object.values(STEPS)) {
       if (!st.quantile) continue;
-      const vals = polls.map(p => S.ps.rows.get(p.key)).filter(Boolean).map(st.get).sort((a, b) => a - b);
+      const vals = polls.map(p => rowFor(st, p.key)).filter(Boolean).map(st.get).sort((a, b) => a - b);
       if (vals.length < 5) continue;
       const q = [0.2, 0.4, 0.6, 0.8].map(f => Math.round(vals[Math.floor(f * (vals.length - 1))] / st.quantile) * st.quantile);
       st.breaks = q.filter((v, i) => i === 0 || v > q[i - 1]);
@@ -111,7 +113,7 @@
       const [, , color, alpha] = RESULT_STEPS.find(([a, b]) => l >= a && l < b);
       return { color, alpha };
     }
-    const st = STEPS[S.shade], r = S.ps && S.ps.rows.get(p.key);
+    const st = STEPS[S.shade], r = st && rowFor(st, p.key);
     if (!st || !r) return null;
     return { color: st.color, alpha: st.alpha[classOf(st.get(r), st.breaks)] };
   }
@@ -124,7 +126,7 @@
   const restylePolls = () => polls.forEach(stylePoll);
 
   function renderShade() {
-    $('shade').innerHTML = SHADES.map(s => `<button type="button" role="radio" data-k="${s.k}" aria-checked="${S.shade === s.k}" ${s.ps && !S.ps ? 'disabled title="Load the Poll Summary first"' : ''}>${s.label}</button>`).join('');
+    $('shade').innerHTML = SHADES.filter(s => !s.lists || S.turnout).map(s => `<button type="button" role="radio" data-k="${s.k}" aria-checked="${S.shade === s.k}" ${s.ps && !S.ps ? 'disabled title="Load the Poll Summary first"' : ''}>${s.label}</button>`).join('');
     const lg = $('legend');
     if (S.shade === 'result') {
       const labels = ['N 10+', 'N 5–10', 'N 2–5', '±2', 'C 2–5', 'C 5–10', 'C 10+'];
@@ -132,12 +134,14 @@
         <div class="scale">${RESULT_STEPS.map(([, , c, a]) => `<span style="background:color-mix(in srgb, var(--${c}) ${a * 100}%, var(--land))"></span>`).join('')}</div>
         <div class="scale-labels">${labels.map(t => `<span>${t}</span>`).join('')}</div>
         <p>Polls that voted at the same place share its result. Advance and mail ballots were counted by location, not by poll.</p>`;
-    } else if (STEPS[S.shade] && S.ps) {
+    } else if (STEPS[S.shade] && (STEPS[S.shade].src === 'turnout' ? S.turnout : S.ps)) {
       const st = STEPS[S.shade];
       const edges = ['<' + st.label(st.breaks[0]), ...st.breaks.slice(0, -1).map((b, i) => `${st.label(b)}–${st.label(st.breaks[i + 1])}`), st.label(st.breaks.at(-1)) + '+'];
-      const title = { support: 'Supporters identified, share of voters', unknown: 'Voters with no support answer yet', find: 'Likely supporters still to find' }[S.shade];
+      const title = { support: 'Supporters identified, share of voters', unknown: 'Voters with no support answer yet', find: 'Likely supporters still to find',
+        tovote: 'Supporters who haven’t voted yet' }[S.shade];
       const note = { support: 'From the Poll Summary’s current support percentage.', unknown: 'From the Poll Summary’s current unknown percentage.',
-        find: 'Estimate: registered voters × share not yet contacted × the Conservative share of 2024 election-day votes at the poll’s voting place.' }[S.shade];
+        find: 'Estimate: registered voters × share not yet contacted × the Conservative share of 2024 election-day votes at the poll’s voting place.',
+        tovote: 'People on the “not voted” supporter list, by the poll on their record, or by where their address falls when the list has no poll.' }[S.shade];
       lg.innerHTML = `<h3>${title}</h3><div class="scale">${st.alpha.map(a => `<span style="background:color-mix(in srgb, var(--${st.color}) ${a * 100}%, var(--land))"></span>`).join('')}</div>
         <div class="scale-labels">${edges.map(t => `<span>${t}</span>`).join('')}</div><p>${note}</p>`;
     } else lg.innerHTML = '';
@@ -156,6 +160,8 @@
     const parts = [`<b>Poll ${p.code}</b>`];
     if (p.place) parts.push(`2024 ${leanText(lean(p.place.day))}`);
     if (r) parts.push(`${fmt(r.support)} supporters (${pct(r.supportPct)})`, `${pct(r.unknown)} not contacted`);
+    const t = S.turnout && turnoutFor(p.key);
+    if (t) parts.push(`${fmt(t.not)} still to vote`);
     return parts.join(' · ');
   }
   function partyBars(t, names) {
@@ -180,8 +186,15 @@
         <div><b>${fmt(r.find)}</b><span>likely supporters to find</span></div></div>`;
       if (r.streets.length) h += `<details><summary>${r.streets.length} streets</summary><div class="streets">${r.streets.map(s => `<span>${esc(s.name)} <span class="num">${s.n}</span></span>`).join('')}</div></details>`;
     }
-    if (S.ix) {
-      const here = S.ix.sites.filter(s => s.va === p.code && s.shown);
+    const t = S.turnout && turnoutFor(p.key);
+    if (t) {
+      h += `<h4>Supporter turnout</h4><div class="grid">
+        <div><b>${fmt(t.voted)}</b><span>voted (${pct(t.voted / (t.voted + t.not || 1))})</span></div>
+        <div><b>${fmt(t.not)}</b><span>still to vote${t.notPhone ? `, ${fmt(t.notPhone)} with a phone` : ''}</span></div></div>
+        <div class="split"><span style="width:${(t.voted / (t.voted + t.not || 1)) * 100}%"></span></div>`;
+    }
+    if (S.sites.length) {
+      const here = S.sites.filter(s => s.va === p.code && s.shown);
       const counts = {};
       here.forEach(s => { counts[s.show] = (counts[s.show] || 0) + 1; });
       const rows = LAYERS.filter(l => counts[l.k]).map(l => `<li><i class="dot" style="${dotStyle(l)}"></i><span>${l.label}</span><b class="num">${counts[l.k]}</b></li>`).join('');
@@ -228,9 +241,9 @@
         }
       });
     }
-    if (!S.ix || z < 16) return;
+    if (!S.sites.length || z < 16) return;
     const fits = z >= 19 ? () => true : placer();
-    const shown = S.ix.sites.filter(s => s.shown && view.contains(s.p));
+    const shown = S.sites.filter(s => s.shown && view.contains(s.p));
     if (z < 19) shown.forEach(s => { const pt = map.latLngToContainerPoint(s.p), r = radius(s) + 1; fits(pt.x - r, pt.y - r, 2 * r, 2 * r); });
     shown.sort((a, b) => countFor(b) - countFor(a));
     let n = 0;
@@ -266,14 +279,57 @@
   const PRESETS = { support: ['con', 'lean'], oppose: ['ndp', 'ndp_lean', 'grn', 'oth'], all: LAYERS.map(l => l.k) };
   const on = new Set(PRESETS.support);
   const dotStyle = l => l.style === 'fill' ? `background:var(--${l.color})` : `border:2px ${l.style === 'dash' ? 'dashed' : 'solid'} var(--${l.color})`;
-  const countFor = s => s.show ? LAYERS.filter(l => LAYER[s.show].group === l.group).reduce((t, l) => t + (s.n[l.k] || 0), 0) : 0;
+  const countFor = s => !s.show ? 0 : S.vote === 'not' ? s.notVoted : S.vote === 'voted' ? s.voted
+    : LAYERS.filter(l => LAYER[s.show].group === l.group).reduce((t, l) => t + (s.n[l.k] || 0), 0);
+  const VOTE = [  // filter on the supporter turnout lists
+    { k: 'all', label: 'Everyone', test: () => true },
+    { k: 'not', label: 'Still to vote', test: s => s.notVoted > 0 },
+    { k: 'voted', label: 'All voted', test: s => s.voted > 0 && !s.notVoted },
+    { k: 'none', label: 'Not on the lists', test: s => !s.voted && !s.notVoted },
+  ];
+  const votePass = s => !S.turnout || VOTE.find(v => v.k === S.vote).test(s);
   const radius = s => 4.5 + Math.min(5, Math.sqrt(Math.max(1, countFor(s))) - 1);
 
-  const ABBR = { AVENUE: 'AVE', STREET: 'ST', ROAD: 'RD', DRIVE: 'DR', BOULEVARD: 'BLVD', CRESCENT: 'CRES', PLACE: 'PL', COURT: 'CRT',
-    HIGHWAY: 'HWY', PARKWAY: 'PKY', LANE: 'LANE', TERRACE: 'TERR', WAY: 'WAY', CIRCLE: 'CIR', GATE: 'GATE', EAST: 'E', WEST: 'W' };
+  const ABBR = { AVENUE: 'AVE', AV: 'AVE', STREET: 'ST', ROAD: 'RD', DRIVE: 'DR', BOULEVARD: 'BLVD', CRESCENT: 'CRES', CRK: 'CRES', CR: 'CRES',
+    PLACE: 'PL', COURT: 'CRT', CT: 'CRT', HIGHWAY: 'HWY', PARKWAY: 'PKY', LANE: 'LANE', TERRACE: 'TERR', WAY: 'WAY', CIRCLE: 'CIR', GATE: 'GATE', EAST: 'E', WEST: 'W' };
   const ALIAS = { 'KING GEORGE HWY': 'KING GEORGE BLVD' };
-  const normStreet = st => { st = st.toUpperCase().replace(/\s+/g, ' ').trim().split(' ').map(w => ABBR[w] || w).join(' '); return ALIAS[st] || st; };
-  const siteKey = civic => { const m = /^(\d+)\s+(.+)$/.exec(civic.trim()); return m ? `${m[1]} ${normStreet(m[2])}` : civic.toUpperCase(); };
+  const TYPES = /\s(AVE|ST|RD|DR|BLVD|CRES|PL|CRT|HWY|PKY|WAY|LANE|TERR|CIR|GATE)$/;
+  const PRETTY = Object.fromEntries(P.names.filter(Boolean).map(n => [n.toUpperCase(), n]));
+  const BY_NAME = {};  // street name without its type, spaces removed -> address-list keys
+  Object.keys(P.addresses).forEach(k => { const n = k.replace(TYPES, '').replace(/ /g, ''); (BY_NAME[n] = BY_NAME[n] || []).push(k); });
+  function lev(a, b) {
+    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] !== b[j - 1]));
+      prev = cur;
+    }
+    return prev[b.length];
+  }
+  const normCache = new Map();
+  function normStreet(raw) {  // '89Avenue', '140St', '90 A Ave', '100th Ave', 'Grosvener Rd' -> the address list's spelling
+    if (normCache.has(raw)) return normCache.get(raw);
+    let st = raw.toUpperCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+    st = st.replace(/^(\d+)(?:TH|ND|RD)\b\s*/, '$1 ').replace(/^(\d+)ST\s+(ST|AVE)$/, '$1 $2');
+    st = st.replace(/^(\d+)\s?([A-Z]?)\s?(AVENUE|AVE|AV|STREET|ST)$/, '$1$2 $3');
+    st = st.split(' ').map(w => ABBR[w] || w).join(' ');
+    const bare = /^(\d+)([A-Z]?)$/.exec(st);
+    if (bare) st = `${st} ${+bare[1] < 125 ? 'AVE' : 'ST'}`;  // Surrey grid: avenues run low, streets high
+    st = ALIAS[st] || st;
+    if (!P.addresses[st]) {
+      const name = st.replace(TYPES, '').replace(/ /g, '');
+      let hits = BY_NAME[name] || [];
+      if (hits.length !== 1 && name.length >= 6 && !/^\d/.test(name)) {
+        hits = Object.entries(BY_NAME).filter(([n]) => !/^\d/.test(n) && lev(n, name) <= 2).flatMap(([, ks]) => ks);
+      }
+      if (hits.length === 1) st = hits[0];
+    }
+    normCache.set(raw, st);
+    return st;
+  }
+  const splitCivic = civic => /^(\d+)\s+(.+)$/.exec(civic.trim());
+  const siteKey = civic => { const m = splitCivic(civic); return m ? `${m[1]} ${normStreet(m[2])}` : civic.toUpperCase(); };
+  const prettyCivic = civic => { const m = splitCivic(civic); if (!m) return civic; const st = normStreet(m[2]); return `${m[1]} ${PRETTY[st] || m[2]}`; };
   function locate(civic) {
     const m = /^(\d+)\s+(.+)$/.exec(civic.trim());
     if (!m) return null;
@@ -307,8 +363,7 @@
   const houseLayer = L.layerGroup().addTo(map);
   function buildHouses() {
     houseLayer.clearLayers();
-    if (!S.ix) return;
-    S.ix.sites.forEach(s => {
+    S.sites.forEach(s => {
       if (!s.p) return;
       s.marker = L.circleMarker(s.p, { renderer: dataCanvas, pane: 'data', radius: 5 }).bindPopup(() => houseCard(s), { maxWidth: 320, autoPanPaddingTopLeft: [24, 72], autoPanPaddingBottomRight: [24, 24] });
       if (s.ls) s.ring = L.circleMarker(s.p, { renderer: dataCanvas, pane: 'data', radius: 8, fill: false, interactive: false });
@@ -316,12 +371,11 @@
     updateHouses();
   }
   function updateHouses() {
-    if (!S.ix) return;
     houseLayer.clearLayers();
     const c = tokens();
-    for (const s of S.ix.sites) {
+    for (const s of S.sites) {
       s.show = LAYERS.find(l => on.has(l.k) && s.n[l.k])?.k || null;
-      s.shown = !!(s.show && s.p);
+      s.shown = !!(s.show && s.p && votePass(s));
       if (!s.shown) continue;
       styleHouse(s, c);
       if (s.ring) houseLayer.addLayer(s.ring);
@@ -338,7 +392,7 @@
     s.marker.setStyle(base).setRadius(r);
     if (s.ring) s.ring.setStyle({ color: c.sign, weight: 2.4 }).setRadius(r + 3.5);
   }
-  const tokens = () => Object.fromEntries(['fg', 'halo', 'surface', 'sign', 'va', 'con', 'ndp', 'grn', 'oth', 'und', 'dnc'].map(k => [k, tok(k)]));
+  const tokens = () => Object.fromEntries(['fg', 'halo', 'surface', 'sign', 'va', 'con', 'ndp', 'grn', 'oth', 'und', 'dnc', 'ramp-gotv'].map(k => [k, tok(k)]));
 
   function houseCard(s) {
     const rows = LAYERS.filter(l => s.n[l.k]).map(l => `<li><i class="dot" style="${dotStyle(l)}"></i><span>${l.label}</span><b class="num">${s.n[l.k]}</b></li>`).join('');
@@ -350,9 +404,18 @@
     const flags = [];
     if (s.ls) flags.push(`<p class="flag sign">Lawn sign requested${s.ls > 1 ? ` (${s.ls} voters)` : ''}</p>`);
     if (s.out) flags.push(`<p class="flag">Outside the ${esc(P.riding)} boundary.</p>`);
-    else if (s.va && String(s.va) !== s.poll && !/S$/.test(s.poll)) flags.push(`<p class="flag">The export says poll ${esc(s.poll)}; the riding map puts this address in ${vaName(s.va)}.</p>`);
+    else if (s.va && String(s.va) !== s.poll && !/S$/.test(s.poll) && s.poll !== '999') flags.push(`<p class="flag">The export says poll ${esc(s.poll)}; the riding map puts this address in ${vaName(s.va)}.</p>`);
     if (s.approx) flags.push('<p class="flag">Placed between neighbouring house numbers; the exact spot may be a few doors off.</p>');
-    return `<div class="pop"><h3>${esc(s.civic)}</h3><p class="meta">Poll ${esc(s.poll)}${s.va ? ` · ${vaName(s.va)}` : ''} · last contact ${day(s.last)}</p><ul class="counts">${rows}</ul>${unitHtml}${flags.join('')}</div>`;
+    let vote = '';
+    if (S.turnout && (s.voted || s.notVoted)) {
+      const nvUnits = [...s.vUnits.entries()].filter(([u, v]) => u && v.not).map(([u]) => u).sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+      vote = `<h4>Voting lists</h4><ul class="counts">
+        ${s.notVoted ? `<li><i class="dot" style="background:var(--ramp-gotv)"></i><span>Still to vote${s.phoneNV ? ` (${s.phoneNV} with a phone)` : ''}</span><b class="num">${s.notVoted}</b></li>` : ''}
+        ${s.voted ? `<li><i class="dot" style="border:2px solid var(--ramp-gotv)"></i><span>Voted</span><b class="num">${s.voted}</b></li>` : ''}</ul>
+        ${nvUnits.length ? `<p class="meta units">Units still to vote: ${nvUnits.slice(0, 48).map(u => `<span>${esc(u)}</span>`).join('')}${nvUnits.length > 48 ? ` +${nvUnits.length - 48} more` : ''}</p>` : ''}`;
+    }
+    const meta = [`Poll ${esc(s.poll)}${s.va ? ` · ${vaName(s.va)}` : ''}`, s.last ? `last contact ${day(s.last)}` : 'from the voting lists, no canvass record'];
+    return `<div class="pop"><h3>${esc(s.civic)}</h3><p class="meta">${meta.join(' · ')}</p>${s.fromIx ? `<ul class="counts">${rows}</ul>${unitHtml}` : ''}${vote}${flags.join('')}</div>`;
   }
 
   // ------------------------------------------------------------------ reading the exports
@@ -369,6 +432,7 @@
       const r = rows[i] || [];
       if (cell(r[0]) === 'Poll' && r.some(v => cell(v) === 'Reg Voters')) return ['ps', i];
       if (cell(r[0]) === 'Date' && cell(r[1]) === 'Voter') return ['ix', i];
+      if (r.some(v => cell(v) === 'Street') && r.some(v => cell(v) === 'Poll') && r.some(v => cell(v) === 'Voter_ID')) return ['list', i];
     }
     return [null, -1];
   }
@@ -424,7 +488,7 @@
       const cat = CATEGORY[v.support] || (v.lawnsign ? 'con' : null);  // a sign request with no answer yet counts as support
       const k = siteKey(civic);
       let s = sites.get(k);
-      if (!s) sites.set(k, s = { civic, polls: {}, n: {}, units: new Map(), ls: 0, last: '' });
+      if (!s) sites.set(k, s = { key: k, civic: prettyCivic(civic), polls: {}, n: {}, units: new Map(), ls: 0, last: '' });
       s.polls[v.poll] = (s.polls[v.poll] || 0) + 1;
       if (cat) s.n[cat] = (s.n[cat] || 0) + 1;
       if (!s.units.has(unit)) s.units.set(unit, {});
@@ -432,20 +496,96 @@
       s.ls += v.lawnsign ? 1 : 0;
       if (v.last > s.last) s.last = v.last;
     }
-    const list = [...sites.values()].filter(s => Object.keys(s.n).length);
-    for (const s of list) {
-      s.poll = Object.entries(s.polls).sort((a, b) => b[1] - a[1])[0][0];
+    return { name: file.name, count, latest, voters: voters.size, seeds: [...sites.values()].filter(s => Object.keys(s.n).length) };
+  }
+
+  // supporter turnout lists ("Yes, voted" / "Yes, not voted"): one row per supporter with poll and street address
+  function listAddress(raw) {
+    let a = cell(raw).replace(/\s+/g, ' ');
+    if (!a || /^(N\/?A|NULL|-)$/i.test(a)) return null;
+    a = a.replace(/^(unit|apt|suite|#)\s*[-#]?\s*/i, '');
+    const m = /^(?:([A-Za-z0-9]+)\s*-\s*)?(\d+)\s*(.*)$/.exec(a);
+    if (!m) return null;
+    const [, unit, n, rest] = m;
+    // '13465-90 Ave' or '13868-91 A' is house number, dash, numbered street
+    if (unit && /^\d{4,}$/.test(unit) && +n < 200 && /^([A-Za-z])?\s*(AVENUE|AVE|STREET|ST)?\.?$/i.test(rest.trim())) return { unit: '', civic: `${unit} ${n}${rest.trim()}` };
+    return rest.trim() ? { unit: unit || '', civic: `${n} ${rest.trim()}` } : null;
+  }
+  function parseList(rows, head, file, kind) {
+    const H = rows[head].map(cell), col = n => H.indexOf(n);
+    const people = [];
+    for (const r of rows.slice(head + 1)) {
+      if (!r || r.every(v => v == null || v === '')) continue;
+      const phone = cell(r[col('Phone')]);
+      people.push({ poll: pollKey(r[col('Poll')]), street: r[col('Street')], phone: !!phone && !/^null$/i.test(phone) });
+    }
+    return { kind, name: file.name, people };
+  }
+  const listKind = name => /not/i.test(name) ? 'not' : 'voted';
+  function turnoutFor(key) {
+    const t = S.turnout && S.turnout.byPoll;
+    return t && (t.get(key) || t.get(key.replace(/S$/, '')));
+  }
+
+  // one site per civic address, from the canvass answers and the turnout lists together
+  function composeSites() {
+    const sites = new Map();
+    const get = (key, civic) => {
+      let s = sites.get(key);
+      if (!s) sites.set(key, s = { key, civic, polls: {}, n: {}, units: new Map(), ls: 0, last: '', voted: 0, notVoted: 0, phoneNV: 0, vUnits: new Map() });
+      return s;
+    };
+    for (const seed of S.ix ? S.ix.seeds : []) {
+      const s = get(seed.key, seed.civic);
+      Object.assign(s, { polls: { ...seed.polls }, n: { ...seed.n }, units: seed.units, ls: seed.ls, last: seed.last, fromIx: true });
+    }
+    S.turnout = null;
+    const NO_POLL = new Set(['', '999']);  // the lists use 999 for "no poll assigned"
+    const lists = [S.lists?.voted, S.lists?.not].filter(Boolean), entries = [];
+    let unplaced = 0;
+    for (const list of lists) {
+      for (const person of list.people) {
+        const a = listAddress(person.street);
+        const s = a && get(siteKey(a.civic), prettyCivic(a.civic));
+        entries.push({ s, kind: list.kind, phone: person.phone, poll: person.poll });
+        if (!s) { unplaced++; continue; }
+        if (!s.fromIx && !NO_POLL.has(person.poll)) s.polls[person.poll] = (s.polls[person.poll] || 0) + 1;
+        const u = s.vUnits.get(a.unit) || { voted: 0, not: 0 };
+        s.vUnits.set(a.unit, u);
+        if (list.kind === 'voted') { s.voted++; u.voted++; } else { s.notVoted++; u.not++; if (person.phone) s.phoneNV++; }
+      }
+    }
+    for (const s of sites.values()) {
+      if (!s.fromIx) { s.n.con = s.voted + s.notVoted; s.fromList = true; }  // a "Yes" on the voting lists is a supporter
       const hit = locate(s.civic);
       if (hit) {
         s.p = hit.p; s.approx = hit.approx;
         s.out = !inside(s.p, P.outline);
         s.va = s.out ? null : polls.find(p => inside(s.p, p.rings))?.code ?? null;
       }
+      s.poll = Object.entries(s.polls).sort((a, b) => b[1] - a[1])[0]?.[0] ?? (s.va ? String(s.va) : '');
+      s.pollFromMap = !Object.keys(s.polls).length && !!s.va;
     }
-    return { name: file.name, count, latest, voters: voters.size, sites: list };
+    if (lists.length) {
+      const byPoll = new Map();
+      let mapped = 0;
+      for (const e of entries) {  // a person with no poll on the list takes the poll their address falls in
+        let key = e.poll;
+        if (NO_POLL.has(key) && e.s?.va) { key = String(e.s.va); mapped++; }
+        const t = byPoll.get(key) || { voted: 0, not: 0, notPhone: 0 };
+        byPoll.set(key, t);
+        if (e.kind === 'voted') t.voted++; else { t.not++; if (e.phone) t.notPhone++; }
+      }
+      const sum = k => [...byPoll.values()].reduce((t, v) => t + v[k], 0);
+      const noPoll = (byPoll.get('999')?.voted || 0) + (byPoll.get('999')?.not || 0);
+      S.turnout = { byPoll, unplaced, mapped, noPoll, voted: sum('voted'), not: sum('not'), notPhone: sum('notPhone'), lists };
+    }
+    S.sites = [...sites.values()];
   }
 
   function afterLoad() {
+    composeSites();
+    buildHouses();
     setBreaks();
     if (S.ps && !S.sortTouched) S.sort = { k: 'find', dir: -1 };
     renderAll();
@@ -458,8 +598,9 @@
         const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null, blankrows: false });
         const [kind, head] = sniff(rows);
         if (kind === 'ps') S.ps = parsePollSummary(rows, head, f);
-        else if (kind === 'ix') { S.ix = parseInteractions(rows, head, f); buildHouses(); }
-        else errors.push(`${f.name} isn’t a Poll Summary or Interactions export. The Poll Summary starts with a “Poll, City, Reg Voters” header row; the Interactions export has a “Date, Voter, Poll, Address” table.`);
+        else if (kind === 'ix') S.ix = parseInteractions(rows, head, f);
+        else if (kind === 'list') { const l = parseList(rows, head, f, listKind(f.name)); S.lists = { ...S.lists, [l.kind]: l }; }
+        else errors.push(`${f.name} isn’t a Poll Summary, Interactions export or voting list. The Poll Summary starts with a “Poll, City, Reg Voters” header row; the Interactions export has a “Date, Voter, Poll, Address” table; a voting list has “Phone, Poll, Street, Voter_ID” columns.`);
       } catch (e) {
         errors.push(`${f.name} couldn’t be read: ${e.message}`);
       }
@@ -468,11 +609,11 @@
     $('loadError').textContent = errors.join(' ');
     S.builtIn = false;
     afterLoad();
-    if (S.ix && !S.ps) selectTab('homes');
+    if (S.sites.length && !S.ps) selectTab('homes');
   }
   $('files').addEventListener('change', e => { loadFiles([...e.target.files]); e.target.value = ''; });
   $('clearData').addEventListener('click', () => {
-    S.ps = null; S.ix = null; S.sort = null; S.builtIn = false;
+    S.ps = null; S.ix = null; S.lists = null; S.turnout = null; S.sites = []; S.sort = null; S.builtIn = false; S.vote = 'all';
     houseLayer.clearLayers();
     if (STEPS[S.shade]) S.shade = 'result';
     map.closePopup();
@@ -500,7 +641,10 @@
   function applyBuiltIn(d) {
     const ps = d.ps && sniff(d.ps.rows), ix = d.ix && sniff(d.ix.rows);
     if (ps && ps[0] === 'ps') S.ps = parsePollSummary(d.ps.rows, ps[1], { name: d.ps.name });
-    if (ix && ix[0] === 'ix') { S.ix = parseInteractions(d.ix.rows, ix[1], { name: d.ix.name }); buildHouses(); }
+    if (ix && ix[0] === 'ix') S.ix = parseInteractions(d.ix.rows, ix[1], { name: d.ix.name });
+    for (const l of d.lists || []) {  // rows are [poll, street, has phone]
+      S.lists = { ...S.lists, [l.kind]: { kind: l.kind, name: l.name, people: l.rows.map(([poll, street, phone]) => ({ poll: pollKey(poll), street, phone: !!phone })) } };
+    }
     S.builtIn = true;
     afterLoad();
   }
@@ -548,10 +692,12 @@
   // ------------------------------------------------------------------ overview
   function renderOverview() {
     const ps = S.ps, ix = S.ix;
-    $('loader').classList.toggle('done', !!(ps && ix));
+    $('loader').classList.toggle('done', !!(ps && ix && S.turnout));
     $('filestate').innerHTML = [
       ['Poll Summary', ps && `${ps.rows.size} polls${ps.asOf ? ` · ${day(ps.asOf)}` : ''}`],
       ['Interactions', ix && `${fmt(ix.count)} interactions through ${day(ix.latest)}`],
+      ['Voted list', S.lists?.voted && `${fmt(S.lists.voted.people.length)} supporters`],
+      ['Not-voted list', S.lists?.not && `${fmt(S.lists.not.people.length)} supporters`],
     ].map(([what, st]) => `<li class="${st ? 'ok' : ''}"><i class="mark"></i><span class="what">${what}</span><span class="state">${st || 'Not loaded'}</span></li>`).join('');
     $('clearData').hidden = !(ps || ix);
     $('clearData').textContent = S.builtIn && ENC ? 'Lock' : 'Clear loaded data';
@@ -559,9 +705,21 @@
 
     const win = total.ndp + 1;
     let h = '';
+    const tv = S.turnout;
+    if (tv) {
+      const listed = tv.voted + tv.not, scale = Math.max(win, listed);
+      h += `<h2>Supporter turnout</h2>
+        <div class="goal" role="img" aria-label="${fmt(tv.voted)} supporters voted, ${fmt(tv.not)} still to vote">
+          <p class="hero"><b>${fmt(tv.not)}</b> supporters still to vote</p>
+          <div class="track"><span class="fill" style="width:${(tv.voted / scale) * 100}%"></span><span class="fill rest" style="left:${(tv.voted / scale) * 100}%;width:${(tv.not / scale) * 100}%"></span><span class="tick" style="left:${(win / scale) * 100}%" title="Votes needed to beat the 2024 NDP total"></span></div>
+          <p><b>${fmt(tv.voted)}</b> have voted (${pct(tv.voted / listed)} of ${fmt(listed)} listed supporters). If everyone listed votes that is <b>${fmt(listed)}</b>, ${listed >= win ? `${fmt(listed - total.ndp)} more than` : `${fmt(win - listed)} short of`} the ${fmt(total.ndp)} votes that won in 2024 (tick). ${fmt(tv.notPhone)} of those still to vote have a phone number.</p>
+        </div>
+        <button type="button" class="btn primary" id="goGotv" style="justify-self:start;margin-top:10px">Map supporters still to vote</button>`;
+    }
+    if (tv && ps) h += '<div style="height:18px"></div>';
     if (ps) {
       const t = ps.totals, share = t.support / win;
-      h = `<h2>2026 canvass</h2>
+      h += `<h2>2026 canvass</h2>
         <div class="goal" role="img" aria-label="${fmt(t.support)} supporters identified, ${pct(share)} of ${fmt(win)}">
           <p class="hero"><b>${fmt(t.support)}</b> supporters identified</p>
           <div class="track"><span class="fill" style="width:${Math.min(100, share * 100)}%"></span><span class="tick" style="left:${(total.con / win) * 100}%" title="2024 Conservative total"></span></div>
@@ -574,9 +732,9 @@
           <div class="kpi"><b>${fmt(t.phones)}</b><span>phone numbers</span></div>
         </div>`;
     }
-    if (ix) {
-      const n = k => ix.sites.filter(s => s.n[k]).length;
-      const supp = ix.sites.filter(s => s.n.con || s.n.lean).length, opp = ix.sites.filter(s => PRESETS.oppose.some(k => s.n[k])).length;
+    if (S.sites.length) {
+      const n = k => S.sites.filter(s => s.n[k]).length;
+      const supp = S.sites.filter(s => s.n.con || s.n.lean).length, opp = S.sites.filter(s => PRESETS.oppose.some(k => s.n[k])).length;
       h += `<p class="note" style="margin-top:${ps ? 12 : 0}px">Households on the map: <b>${fmt(supp)}</b> supporting, <b>${fmt(opp)}</b> with other-party voters, <b>${fmt(n('und'))}</b> undecided. See the Households tab.</p>`;
     }
     $('canvass').innerHTML = h;
@@ -602,6 +760,17 @@
         <td class="r">${fmt(valid(pl.day))}</td><td class="r">${chip(lean(pl.day))}</td>${ps ? `<td class="r">${fmt(idsAt(pl))} / ${fmt(pl.day.con)}</td>` : ''}</tr>`).join('')}</tbody></table></div>
       <p class="note" style="margin-top:6px">Select a place to zoom to its polls.</p>`;
   }
+  $('canvass').addEventListener('click', e => {
+    if (!e.target.closest('#goGotv')) return;
+    S.vote = 'not';
+    on.clear();
+    PRESETS.support.forEach(k => on.add(k));
+    S.shade = 'tovote';
+    renderShade();
+    restylePolls();
+    updateHouses();
+    selectTab('homes');
+  });
   function goPlace(i) {
     const pl = places[i];
     const b = L.latLngBounds([]);
@@ -621,33 +790,56 @@
     { k: 'support', label: 'Supp.', get: r => r.support, show: r => fmt(r.support), r: true, ps: true },
     { k: 'supportPct', label: 'ID %', get: r => r.supportPct, show: r => pct(r.supportPct), r: true, ps: true },
     { k: 'unknown', label: 'Unknown', get: r => r.unknown, show: r => pct(r.unknown), r: true, ps: true },
-    { k: 'find', label: 'To find', get: r => r.find, show: (r, max) => `<span class="minibar"><span style="width:${(r.find / max) * 100}%"></span></span>${fmt(r.find)}`, r: true, ps: true },
+    { k: 'find', label: 'To find', get: r => r.find, show: (r, max) => `<span class="minibar"><span style="width:${(r.find / max.find) * 100}%"></span></span>${fmt(r.find)}`, r: true, ps: true },
+    { k: 'voted', label: 'Voted', get: r => r.voted, show: r => fmt(r.voted), r: true, view: 'turnout' },
+    { k: 'tovote', label: 'To vote', get: r => r.tovote, show: (r, max) => `<span class="minibar gotv"><span style="width:${(r.tovote / max.tovote) * 100}%"></span></span>${fmt(r.tovote)}`, r: true, view: 'turnout' },
+    { k: 'turnout', label: 'Turnout', get: r => r.turnout ?? -1, show: r => r.turnout == null ? '—' : pct(r.turnout), r: true, view: 'turnout' },
+    { k: 'phone', label: 'Phone', get: r => r.phone, show: r => fmt(r.phone), r: true, view: 'turnout' },
   ];
+  const VIEW_COLS = { canvass: ['code', 'lean', 'reg', 'support', 'supportPct', 'unknown', 'find'], turnout: ['code', 'lean', 'reg', 'voted', 'tovote', 'turnout', 'phone'] };
   function pollRows() {
     const rows = polls.map(p => {
       const r = S.ps?.rows.get(p.key);
       return { key: p.key, label: String(p.code), sortCode: p.code, lean: p.place ? lean(p.place.day) : null, reg: r ? r.reg : p.reg2024,
         support: r?.support ?? 0, supportPct: r?.supportPct ?? 0, unknown: r?.unknown ?? 0, find: r?.find ?? 0, onMap: true };
     });
+    rows.forEach(r => {
+      const t = turnoutFor(r.key);
+      Object.assign(r, { voted: t?.voted ?? 0, tovote: t?.not ?? 0, phone: t?.notPhone ?? 0, turnout: t && (t.voted + t.not) ? t.voted / (t.voted + t.not) : null });
+    });
     if (S.ps) for (const r of S.ps.rows.values()) {
       if (r.onMap || !r.reg) continue;  // site-based polls (care homes, apartments) have no area on the map
+      const t = turnoutFor(r.key);
       rows.push({ key: r.key, label: r.key, sortCode: parseInt(r.key, 10) + 0.5, lean: null, reg: r.reg, support: r.support,
-        supportPct: r.supportPct, unknown: r.unknown, find: r.find, onMap: false });
+        supportPct: r.supportPct, unknown: r.unknown, find: r.find, onMap: false,
+        voted: t?.voted ?? 0, tovote: t?.not ?? 0, phone: t?.notPhone ?? 0, turnout: t && (t.voted + t.not) ? t.voted / (t.voted + t.not) : null });
     }
     return rows;
   }
   function renderPolls() {
-    const cols = COLS.filter(c => !c.ps || S.ps);
-    const sort = S.sort && cols.some(c => c.k === S.sort.k) ? S.sort : { k: 'code', dir: 1 };
+    const view = S.turnout && (S.pollView === 'turnout' || !S.pollView || !S.ps) ? 'turnout' : 'canvass';
+    $('pollView').hidden = !(S.turnout && S.ps);
+    $('pollView').innerHTML = ['turnout', 'canvass'].map(v => `<button type="button" class="chip-btn" data-view="${v}" aria-pressed="${view === v}">${v === 'turnout' ? 'Turnout' : 'Canvass'}</button>`).join('');
+    const cols = VIEW_COLS[view].map(k => COLS.find(c => c.k === k)).filter(c => !c.ps || S.ps);
+    const sort = S.sort && cols.some(c => c.k === S.sort.k) ? S.sort : view === 'turnout' ? { k: 'tovote', dir: -1 } : { k: 'code', dir: 1 };
     const col = cols.find(c => c.k === sort.k);
     const rows = pollRows().sort((a, b) => (col.get(a) - col.get(b)) * sort.dir || a.sortCode - b.sortCode);
-    const max = Math.max(1, ...rows.map(r => r.find));
+    const max = { find: Math.max(1, ...rows.map(r => r.find)), tovote: Math.max(1, ...rows.map(r => r.tovote)) };
     $('pollHead').innerHTML = cols.map(c => `<th class="${c.r ? 'r' : ''}" ${c.k === sort.k ? `aria-sort="${sort.dir > 0 ? 'ascending' : 'descending'}"` : ''}><button type="button" data-k="${c.k}">${c.label}</button></th>`).join('');
     $('pollBody').innerHTML = rows.map(r => `<tr class="${r.onMap ? 'go' : ''}${r.key === S.sel ? ' sel' : ''}" ${r.onMap ? 'tabindex="0"' : ''} data-key="${esc(r.key)}">${cols.map(c => `<td class="${c.r ? 'r' : ''}">${c.show(r, max)}</td>`).join('')}</tr>`).join('');
-    $('pollsNote').innerHTML = S.ps
+    $('pollsNote').innerHTML = view === 'turnout'
+      ? `Supporters on the voting lists, by the poll on each record. <b>To vote</b> is the not-voted list; <b>Phone</b> counts those with a phone number. Select a poll to see it on the map.`
+      : S.ps
       ? `<b>To find</b> estimates supporters not yet identified: registered voters × share not yet contacted × the Conservative share of 2024 election-day votes at the poll’s voting place. Select a poll to see it on the map.`
       : `Load the Poll Summary to add supporters identified, contact rates and a canvass priority for every poll. Voters are the 2024 registered counts until then.`;
   }
+  $('pollView').addEventListener('click', e => {
+    const b = e.target.closest('[data-view]');
+    if (!b) return;
+    S.pollView = b.dataset.view;
+    S.sort = null;
+    renderPolls();
+  });
   $('pollHead').addEventListener('click', e => {
     const b = e.target.closest('button[data-k]');
     if (!b) return;
@@ -668,15 +860,20 @@
 
   // ------------------------------------------------------------------ households tab
   function renderLayers() {
-    const ix = S.ix;
-    $('homesEmpty').hidden = !!ix;
-    $('homes').hidden = !ix;
-    if (!ix) return;
-    const count = k => ix.sites.filter(s => s.p && s.n[k]).length;
+    const has = S.sites.length > 0;
+    $('homesEmpty').hidden = has;
+    $('homes').hidden = !has;
+    if (!has) return;
+    const count = k => S.sites.filter(s => s.p && s.n[k] && votePass(s)).length;
+    $('voteBlock').hidden = !S.turnout;
+    if (S.turnout) {
+      const placed = S.sites.filter(s => s.p && LAYERS.some(l => on.has(l.k) && s.n[l.k]));
+      $('voteFilter').innerHTML = VOTE.map(v => `<button type="button" class="chip-btn" data-vote="${v.k}" aria-pressed="${S.vote === v.k}">${v.label} <span class="num">${fmt(placed.filter(v.test).length)}</span></button>`).join('');
+    }
     $('layers').innerHTML = LAYERS.map(l => `<label class="toggle" for="show-${l.k}"><input type="checkbox" id="show-${l.k}" data-k="${l.k}" ${on.has(l.k) ? 'checked' : ''}>
       <span class="sw ${l.style === 'fill' ? '' : l.style === 'dash' ? 'dash' : 'hollow'}" style="border-color:var(--${l.color});background:var(--${l.color})"></span>
       <span class="name">${l.label}</span><span class="count">${fmt(count(l.k))}</span></label>`).join('') +
-      (ix.sites.some(s => s.ls) ? '<div class="key"><span class="sw ring" style="border-color:var(--sign)"></span><span>Ring: lawn sign requested</span></div>' : '') +
+      (S.sites.some(s => s.ls) ? '<div class="key"><span class="sw ring" style="border-color:var(--sign)"></span><span>Ring: lawn sign requested</span></div>' : '') +
       '<div class="key"><span class="sw dash" style="border-color:var(--muted)"></span><span>Dashed: outside the riding</span></div>';
     document.querySelectorAll('.presets [data-preset]').forEach(b => {
       const set = PRESETS[b.dataset.preset];
@@ -689,6 +886,12 @@
     if (e.target.checked) on.add(k); else on.delete(k);
     updateHouses();
   });
+  $('voteFilter').addEventListener('click', e => {
+    const b = e.target.closest('[data-vote]');
+    if (!b) return;
+    S.vote = b.dataset.vote;
+    updateHouses();
+  });
   document.querySelector('.presets').addEventListener('click', e => {
     const b = e.target.closest('[data-preset]');
     if (!b) return;
@@ -698,16 +901,16 @@
   });
 
   function renderHomes() {
-    const ix = S.ix;
-    if (!ix) { renderLayers(); return; }
     renderLayers();
-    $('addrs').innerHTML = ix.sites.filter(s => s.p).map(s => `<option value="${esc(s.civic)}"></option>`).join('');
-    const placed = ix.sites.filter(s => s.p), out = placed.filter(s => s.out), missing = ix.sites.filter(s => !s.p);
-    const moved = placed.filter(s => !s.out && s.va && String(s.va) !== s.poll && !/S$/.test(s.poll)), approx = placed.filter(s => s.approx);
+    if (!S.sites.length) return;
+    $('addrs').innerHTML = S.sites.filter(s => s.p).map(s => `<option value="${esc(s.civic)}"></option>`).join('');
+    const placed = S.sites.filter(s => s.p), out = placed.filter(s => s.out), missing = S.sites.filter(s => !s.p);
+    const moved = placed.filter(s => !s.out && s.va && String(s.va) !== s.poll && !/S$/.test(s.poll) && s.poll !== '999'), approx = placed.filter(s => s.approx);
     const list = (arr, meta, go) => `<ul class="addr-list">${arr.map((s, i) => go
       ? `<li><button type="button" data-list="${go}" data-i="${i}">${esc(s.civic)} <span class="meta">${meta(s)}</span></button></li>`
       : `<li>${esc(s.civic)} <span class="meta">${meta(s)}</span></li>`).join('')}</ul>`;
-    const answers = s => LAYERS.filter(l => s.n[l.k]).map(l => `${s.n[l.k]} ${l.label.toLowerCase()}`).join(', ');
+    const answers = s => s.fromIx ? LAYERS.filter(l => s.n[l.k]).map(l => `${s.n[l.k]} ${l.label.toLowerCase()}`).join(', ')
+      : `${s.notVoted ? `${s.notVoted} still to vote` : ''}${s.notVoted && s.voted ? ', ' : ''}${s.voted ? `${s.voted} voted` : ''} (voting list)`;
     $('check').className = 'check';
     $('check').innerHTML = `<h2>Checked against the riding map</h2><ul>
       <li><b>${fmt(placed.length - out.length)}</b><span>addresses inside ${esc(P.riding)}</span></li>
@@ -717,28 +920,31 @@
       <li><b>${fmt(approx.length)}</b><span>placed between neighbouring house numbers</span></li></ul>
       ${out.length ? `<details><summary>Outside the boundary</summary>${list(out, s => `poll ${esc(s.poll)}`, 'out')}</details>` : ''}
       ${moved.length ? `<details><summary>Poll differs from the map</summary>${list(moved, s => `poll ${esc(s.poll)} → ${vaName(s.va)}`, 'moved')}</details>` : ''}
-      ${missing.length ? `<details><summary>Not placed on the map</summary>${list(missing, s => `poll ${esc(s.poll)} · ${answers(s)}`)}</details>` : ''}`;
-    S.lists = { out, moved };
+      ${missing.length ? `<details><summary>Not placed on the map</summary>${list(missing, s => `poll ${esc(s.poll)} · ${answers(s)}`)}</details>` : ''}
+      ${S.turnout ? `<p class="note" style="margin-top:6px">Voting lists: ${fmt(S.turnout.mapped)} supporters listed without a poll (999) were given the poll their address falls in.${S.turnout.unplaced ? ` ${fmt(S.turnout.unplaced)} have no usable address (blank, “N/A” or a unit number only) and are not on the map${S.turnout.noPoll ? `; ${fmt(S.turnout.noPoll)} of the list still have no poll` : ''}.` : ''}</p>` : ''}`;
+    S.checkLists = { out, moved };
   }
-  $('check').addEventListener('click', e => { const b = e.target.closest('button[data-list]'); if (b) showHouse(S.lists[b.dataset.list][+b.dataset.i]); });
+  $('check').addEventListener('click', e => { const b = e.target.closest('button[data-list]'); if (b) showHouse(S.checkLists[b.dataset.list][+b.dataset.i]); });
   function showHouse(s) {
     if (!s || !s.p) return;
-    if (!s.shown) { LAYERS.filter(l => s.n[l.k]).forEach(l => on.add(l.k)); updateHouses(); }
+    if (!s.shown) { LAYERS.filter(l => s.n[l.k]).forEach(l => on.add(l.k)); if (!votePass(s)) S.vote = 'all'; updateHouses(); }
     map.setView(s.p, 18, { animate: !reduced });
     s.marker.openPopup();
     if (phone()) setSheet(false);
   }
   $('find').addEventListener('change', e => {
     const q = e.target.value.trim().toLowerCase();
-    if (!q || !S.ix) return;
-    const sites = S.ix.sites.filter(s => s.p);
+    if (!q || !S.sites.length) return;
+    const sites = S.sites.filter(s => s.p);
     showHouse(sites.find(s => s.civic.toLowerCase() === q) || sites.find(s => s.civic.toLowerCase().startsWith(q)) || sites.find(s => s.civic.toLowerCase().includes(q)));
   });
   $('downloadCsv').addEventListener('click', () => {
     const q = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
-    const rows = [['address', 'units', 'poll (export)', 'voting area (map)', 'riding', 'shown as', ...LAYERS.map(l => l.label), 'lawn signs', 'last contact', 'placement', 'lat', 'lon']];
-    S.ix.sites.filter(s => s.shown).forEach(s => rows.push([s.civic, [...s.units.keys()].filter(Boolean).join(' '), s.poll, s.va || '', s.out ? 'outside' : 'inside',
-      LAYER[s.show].label, ...LAYERS.map(l => s.n[l.k] || 0), s.ls, s.last, s.approx ? 'between neighbours' : 'address point', s.p[0].toFixed(5), s.p[1].toFixed(5)]));
+    const rows = [['address', 'units', 'poll (export)', 'voting area (map)', 'riding', 'shown as', ...LAYERS.map(l => l.label), 'lawn signs',
+      'voted (list)', 'still to vote (list)', 'still to vote with phone', 'units still to vote', 'last contact', 'placement', 'lat', 'lon']];
+    S.sites.filter(s => s.shown).forEach(s => rows.push([s.civic, [...new Set([...s.units.keys(), ...s.vUnits.keys()])].filter(Boolean).join(' '), s.poll, s.va || '', s.out ? 'outside' : 'inside',
+      LAYER[s.show].label, ...LAYERS.map(l => s.fromIx ? s.n[l.k] || 0 : 0), s.ls, s.voted, s.notVoted, s.phoneNV,
+      [...s.vUnits.entries()].filter(([u, v]) => u && v.not).map(([u]) => u).join(' '), s.last, s.approx ? 'between neighbours' : 'address point', s.p[0].toFixed(5), s.p[1].toFixed(5)]));
     const url = URL.createObjectURL(new Blob([rows.map(r => r.map(q).join(',')).join('\n')], { type: 'text/csv' }));
     const a = Object.assign(document.createElement('a'), { href: url, download: `${P.code.toLowerCase()}-households.csv` });
     document.body.appendChild(a);
@@ -781,7 +987,7 @@
     mask.setStyle({ fillColor: tok('mask') });
     outline.setStyle({ color: tok('edge') });
     restylePolls();
-    if (S.ix) { const c = tokens(); S.ix.sites.forEach(s => { if (s.shown) styleHouse(s, c); }); }
+    if (S.sites.length) { const c = tokens(); S.sites.forEach(s => { if (s.shown) styleHouse(s, c); }); }
   }
   map.on('zoomend', applyTheme);
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);

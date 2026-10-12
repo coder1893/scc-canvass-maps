@@ -6,7 +6,7 @@
   /* party identity: validated (OKLab, all pairs, protan/deutan) against the map surface */
   --con: #2459c2; --ndp: #f2852f; --grn: #16753a; --oth: #cc4793;
   --und: #868d97; --dnc: #b3261e; --sign: #c99a06; --even: #9aa0a8;
-  --ramp-contact: #3d4654; --ramp-find: #6a4fd0;
+  --ramp-contact: #3d4654; --ramp-find: #6a4fd0; --ramp-gotv: #0e7490;
   --font-display: "Archivo", "Arial Black", system-ui, sans-serif;
   --font-ui: "IBM Plex Sans Condensed", "Arial Narrow", "Roboto Condensed", system-ui, sans-serif;
   color-scheme: light;
@@ -17,7 +17,7 @@
     --road: #353c46; --road-major: #525b69; --road-label: #8f98a4; --edge: #e8ebef; --va: #6b7380; --mask: #0d1014; --halo: #10141a;
     --con: #5a88ec; --ndp: #d6782b; --grn: #1b7a42; --oth: #c95599;
     --und: #8d96a3; --dnc: #ff6b5e; --sign: #e8b923; --even: #707782;
-    --ramp-contact: #c9d0da; --ramp-find: #a28ff2;
+    --ramp-contact: #c9d0da; --ramp-find: #a28ff2; --ramp-gotv: #22b8cf;
     color-scheme: dark;
   }
 }
@@ -26,7 +26,7 @@
   --road: #353c46; --road-major: #525b69; --road-label: #8f98a4; --edge: #e8ebef; --va: #6b7380; --mask: #0d1014; --halo: #10141a;
   --con: #5a88ec; --ndp: #d6782b; --grn: #1b7a42; --oth: #c95599;
   --und: #8d96a3; --dnc: #ff6b5e; --sign: #e8b923; --even: #707782;
-  --ramp-contact: #c9d0da; --ramp-find: #a28ff2;
+  --ramp-contact: #c9d0da; --ramp-find: #a28ff2; --ramp-gotv: #22b8cf;
   color-scheme: dark;
 }
 
@@ -86,6 +86,7 @@ p { margin: 0; }
 .goal { display: grid; gap: 6px; margin-top: 4px; }
 .goal .track { position: relative; height: 10px; border-radius: 3px; background: color-mix(in srgb, var(--fg) 8%, transparent); }
 .goal .fill { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--con); }
+.goal .fill.rest { right: auto; inset-block: 0; border-radius: 0 3px 3px 0; background: color-mix(in srgb, var(--con) 32%, transparent); }
 .goal .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--fg); }
 .goal p { font-size: 13px; color: var(--muted); }
 .goal p b { color: var(--fg); }
@@ -123,6 +124,11 @@ td:first-child { white-space: normal; }
 .place-name small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
 .minibar { display: inline-block; width: 26px; height: 7px; border-radius: 2px; background: color-mix(in srgb, var(--fg) 8%, transparent); vertical-align: middle; margin-right: 6px; overflow: hidden; }
 .minibar span { display: block; height: 100%; background: var(--ramp-find); }
+.minibar.gotv span { background: var(--ramp-gotv); }
+.split { height: 6px; border-radius: 2px; background: color-mix(in srgb, var(--ramp-gotv) 25%, transparent); overflow: hidden; }
+.split span { display: block; height: 100%; background: var(--ramp-gotv); }
+.vote-block { display: grid; gap: 2px; }
+.chip-btn .num { font-weight: 500; opacity: .75; margin-left: 2px; }
 
 /* households */
 .presets { display: flex; flex-wrap: wrap; gap: 6px; }
