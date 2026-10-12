@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<!-- The page may load its own files and Google Fonts, and nothing may leave it: no fetch, no beacons, no form posts.
+     Loaded exports stay in this tab's memory. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<title>Surrey City Centre Campaign Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=IBM+Plex+Sans+Condensed:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="vendor/leaflet.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="panel" aria-label="Campaign details">
+    <header class="head">
+      <p class="eyebrow" id="eyebrow">Surrey City Centre</p>
+      <h1>Campaign map</h1>
+      <button class="sheet-toggle" id="sheetToggle" type="button" aria-expanded="true" aria-controls="panelBody">Hide</button>
+    </header>
+    <div class="tabs" role="tablist" aria-label="Sections">
+      <button type="button" role="tab" id="tab-overview" aria-controls="pane-overview" aria-selected="true">Overview</button>
+      <button type="button" role="tab" id="tab-polls" aria-controls="pane-polls" aria-selected="false" tabindex="-1">Polls</button>
+      <button type="button" role="tab" id="tab-homes" aria-controls="pane-homes" aria-selected="false" tabindex="-1">Households</button>
+    </div>
+    <div class="body" id="panelBody">
+      <section class="pane" id="pane-overview" role="tabpanel" aria-labelledby="tab-overview">
+        <div class="loader" id="loader">
+          <h2>Your campaign data</h2>
+          <p>Load the <b>Poll Summary</b> and <b>Interactions</b> exports (.xlsx). They are opened in this browser only: the page has no server and is blocked from sending data anywhere. Closing the tab clears them.</p>
+          <div class="load-row">
+            <label class="btn primary" for="files">Choose files</label>
+            <input id="files" type="file" accept=".xlsx,.xls,.csv" multiple>
+            <span class="hint">or drop them on the map</span>
+          </div>
+          <ul class="filestate" id="filestate"></ul>
+          <button type="button" class="btn quiet" id="clearData" hidden>Clear loaded data</button>
+          <p class="error" id="loadError" role="alert" hidden></p>
+        </div>
+        <div id="canvass"></div>
+        <div id="result2024"></div>
+        <div id="ways"></div>
+        <div id="places"></div>
+      </section>
+      <section class="pane" id="pane-polls" role="tabpanel" aria-labelledby="tab-polls" hidden>
+        <p class="note" id="pollsNote"></p>
+        <div class="table-wrap">
+          <table class="polls" id="pollTable">
+            <thead><tr id="pollHead"></tr></thead>
+            <tbody id="pollBody"></tbody>
+          </table>
+        </div>
+      </section>
+      <section class="pane" id="pane-homes" role="tabpanel" aria-labelledby="tab-homes" hidden>
+        <div id="homesEmpty" class="empty">
+          <h2>Households</h2>
+          <p>Load the Interactions export to place every contacted household on the map, labelled by address: supporters, other parties, undecided and do-not-contact.</p>
+          <label class="btn primary" for="files">Choose files</label>
+        </div>
+        <div id="homes" hidden>
+          <div class="presets" role="group" aria-label="Quick views">
+            <button type="button" class="chip-btn" data-preset="support">Supporters</button>
+            <button type="button" class="chip-btn" data-preset="oppose">Non-supporters</button>
+            <button type="button" class="chip-btn" data-preset="all">Everyone</button>
+          </div>
+          <div class="layers" id="layers"></div>
+          <div class="search">
+            <label for="find">Find an address</label>
+            <input id="find" type="search" list="addrs" placeholder="e.g. 13450 104 Ave" autocomplete="off">
+            <datalist id="addrs"></datalist>
+          </div>
+          <div id="check"></div>
+          <button type="button" class="btn" id="downloadCsv">Download shown households (CSV)</button>
+        </div>
+      </section>
+    </div>
+  </aside>
+  <div class="mapwrap">
+    <div id="map" role="region" aria-label="Riding map"></div>
+    <div class="shade" id="shade" role="radiogroup" aria-label="Shade polls by"></div>
+    <div class="legend" id="legend" aria-live="polite"></div>
+  </div>
+</div>
+<div class="dropzone" id="dropzone" hidden><p>Drop the Poll Summary or Interactions export</p></div>
+<script src="vendor/leaflet.js"></script>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="data/public.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
