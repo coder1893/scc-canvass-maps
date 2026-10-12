@@ -1,6 +1,6 @@
 # Surrey City Centre campaign map
 
-A static dashboard for the Surrey City Centre provincial riding: polls shaded by the 2024 result, election-day voting places, how the 2024 votes came in, and, once you load your own exports, supporters identified, contact rates, a canvass priority per poll and every contacted household on a labelled street map.
+A static dashboard for the Surrey City Centre provincial riding: supporters found against the votes needed to win, polls shaded by the 2024 result, supporters found, voters not contacted or 2024 supporters who didn't vote, and every contacted household on a labelled street map with one simple filter.
 
 **The page is password-protected.** The team's campaign data (Poll Summary, Interactions and the 2024 supporter voted / did-not-vote lists, with voter names, phone numbers, voter IDs, notes and canvassers removed) is in `data/campaign.enc.js`, encrypted with AES-256-GCM under a key derived from the team password (PBKDF2-SHA256, 600,000 iterations). Without the password the file can't be read, so copying the site or this repository yields nothing usable. Everything else is public: `data/public.js` is built from BC open data: Elections BC 2024 boundaries, voting areas, registered voter counts, results by voting place and the poll-to-voting-place assignment; the BC Digital Road Atlas; and BC Address Geocoder address points.
 

@@ -42,24 +42,22 @@
     <div class="body" id="panelBody">
       <section class="pane" id="pane-overview" role="tabpanel" aria-labelledby="tab-overview">
         <div class="loader" id="loader">
-          <h2>Your campaign data</h2>
-          <p>Load the <b>Poll Summary</b>, <b>Interactions</b> export and the <b>2024 voted / not-voted</b> supporter lists (.xlsx). They are opened in this browser only: the page has no server and is blocked from sending data anywhere. Closing the tab clears them.</p>
-          <div class="load-row">
-            <label class="btn primary" for="files">Choose files</label>
-            <input id="files" type="file" accept=".xlsx,.xls,.csv" multiple>
-            <span class="hint">or drop them on the map</span>
+          <div class="intro">
+            <h2>Your campaign data</h2>
+            <p>Load the <b>Poll Summary</b>, <b>Interactions</b> export and the <b>2024 voted / not-voted</b> supporter lists (.xlsx). They are opened in this browser only and never uploaded. Closing the tab clears them.</p>
           </div>
-          <ul class="filestate" id="filestate"></ul>
-          <button type="button" class="btn quiet" id="clearData" hidden>Clear loaded data</button>
+          <p class="loaded" id="loaded" hidden></p>
+          <div class="load-row">
+            <label class="btn primary" for="files" id="chooseLabel">Choose files</label>
+            <input id="files" type="file" accept=".xlsx,.xls,.csv" multiple>
+            <button type="button" class="btn quiet" id="clearData" hidden>Lock</button>
+          </div>
           <p class="error" id="loadError" role="alert" hidden></p>
         </div>
         <div id="canvass"></div>
         <div id="result2024"></div>
-        <div id="ways"></div>
-        <div id="places"></div>
       </section>
       <section class="pane" id="pane-polls" role="tabpanel" aria-labelledby="tab-polls" hidden>
-        <div class="presets" id="pollView" role="group" aria-label="Table view" hidden></div>
         <p class="note" id="pollsNote"></p>
         <div class="table-wrap">
           <table class="polls" id="pollTable">
@@ -71,27 +69,22 @@
       <section class="pane" id="pane-homes" role="tabpanel" aria-labelledby="tab-homes" hidden>
         <div id="homesEmpty" class="empty">
           <h2>Households</h2>
-          <p>Load the Interactions export or the 2024 supporter lists to place every household on the map, labelled by address: supporters, other parties, undecided, do-not-contact, and which 2024 supporters didn’t vote.</p>
+          <p>Load the Interactions export or the 2024 supporter lists to put every contacted household on the map, labelled by address.</p>
           <label class="btn primary" for="files">Choose files</label>
         </div>
         <div id="homes" hidden>
-          <div class="vote-block" id="voteBlock" hidden>
-            <h2>2024 voting <span class="aside">· from the 2024 supporter lists</span></h2>
-            <div class="presets" id="voteFilter" role="group" aria-label="Voting status"></div>
+          <div class="show">
+            <h2>Show on the map</h2>
+            <div class="presets" id="views" role="group" aria-label="Show on the map"></div>
+            <div class="key" id="key"></div>
           </div>
-          <div class="presets" role="group" aria-label="Quick views">
-            <button type="button" class="chip-btn" data-preset="support">Supporters</button>
-            <button type="button" class="chip-btn" data-preset="oppose">Non-supporters</button>
-            <button type="button" class="chip-btn" data-preset="all">Everyone</button>
-          </div>
-          <div class="layers" id="layers"></div>
           <div class="search">
             <label for="find">Find an address</label>
             <input id="find" type="search" list="addrs" placeholder="e.g. 13450 104 Ave" autocomplete="off">
             <datalist id="addrs"></datalist>
           </div>
-          <div id="check"></div>
-          <button type="button" class="btn" id="downloadCsv">Download shown households (CSV)</button>
+          <button type="button" class="btn" id="downloadCsv">Download this list (CSV)</button>
+          <details class="check" id="check"></details>
         </div>
       </section>
     </div>
@@ -102,7 +95,7 @@
     <div class="legend" id="legend" aria-live="polite"></div>
   </div>
 </div>
-<div class="dropzone" id="dropzone" hidden><p>Drop the Poll Summary or Interactions export</p></div>
+<div class="dropzone" id="dropzone" hidden><p>Drop your campaign files here</p></div>
 <script src="vendor/leaflet.js"></script>
 <script src="vendor/xlsx.full.min.js"></script>
 <script src="data/public.js"></script>
