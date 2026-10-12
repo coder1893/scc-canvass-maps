@@ -219,6 +219,16 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 
 .place-names .place-label span { display: block; }
 #homes { display: grid; gap: 18px; }
+.gate { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; padding: 24px 16px; background: var(--bg); overflow-y: auto; }
+.gate-card { width: min(380px, 100%); display: grid; gap: 10px; padding: 26px 24px; border-radius: 12px; background: var(--surface); border: 1px solid var(--rule); box-shadow: 0 10px 40px rgb(0 0 0 / .08); }
+.gate-card h1 { font-size: 34px; margin-bottom: 4px; }
+.gate-card label { font-size: 11.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-top: 6px; }
+.gate-card input { padding: 10px 12px; border-radius: 6px; border: 1px solid var(--rule); background: var(--bg); font-size: 16px; letter-spacing: .04em; min-width: 0; }
+.gate-card input:focus-visible { outline: 2px solid var(--con); outline-offset: 0; }
+.gate-card .btn { padding: 10px 14px; }
+.gate-card .btn:disabled { opacity: .6; cursor: progress; }
+.gate-card > p:not(.eyebrow):not(.error) { color: var(--muted); font-size: 13.5px; }
+.gate-card .note { font-size: 12.5px; margin-top: 4px; }
 .dropzone { position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 80%, transparent); }
 .dropzone p { padding: 24px 32px; border: 2px dashed var(--fg); border-radius: 12px; font: 700 18px var(--font-display); background: var(--surface); }
 

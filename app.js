@@ -445,6 +445,11 @@
     return { name: file.name, count, latest, voters: voters.size, sites: list };
   }
 
+  function afterLoad() {
+    setBreaks();
+    if (S.ps && !S.sortTouched) S.sort = { k: 'find', dir: -1 };
+    renderAll();
+  }
   async function loadFiles(files) {
     const errors = [];
     for (const f of files) {
@@ -461,18 +466,71 @@
     }
     $('loadError').hidden = !errors.length;
     $('loadError').textContent = errors.join(' ');
-    setBreaks();
-    if (S.ps && !S.sortTouched) S.sort = { k: 'find', dir: -1 };
-    renderAll();
+    S.builtIn = false;
+    afterLoad();
     if (S.ix && !S.ps) selectTab('homes');
   }
   $('files').addEventListener('change', e => { loadFiles([...e.target.files]); e.target.value = ''; });
   $('clearData').addEventListener('click', () => {
-    S.ps = null; S.ix = null; S.sort = null;
+    S.ps = null; S.ix = null; S.sort = null; S.builtIn = false;
     houseLayer.clearLayers();
     if (STEPS[S.shade]) S.shade = 'result';
     map.closePopup();
     renderAll();
+    if (ENC) lock();
+  });
+
+  // ------------------------------------------------------------------ built-in data, encrypted with the team password
+  // data/campaign.enc.js holds AES-256-GCM ciphertext; the key is derived from the password with PBKDF2-SHA256.
+  // The derived key may be kept in sessionStorage so a reload in the same tab doesn't ask again; closing the tab drops it.
+  const ENC = window.CAMPAIGN_ENC;
+  const KEY_SLOT = 'campaign-map-key';
+  const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+  const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  async function deriveKey(password) {
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: unb64(ENC.salt), iterations: ENC.iterations },
+      base, { name: 'AES-GCM', length: 256 }, true, ['decrypt']);
+  }
+  async function openWith(key) {
+    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(ENC.iv) }, key, unb64(ENC.data));
+    const text = await new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+    return JSON.parse(text);
+  }
+  function applyBuiltIn(d) {
+    const ps = d.ps && sniff(d.ps.rows), ix = d.ix && sniff(d.ix.rows);
+    if (ps && ps[0] === 'ps') S.ps = parsePollSummary(d.ps.rows, ps[1], { name: d.ps.name });
+    if (ix && ix[0] === 'ix') { S.ix = parseInteractions(d.ix.rows, ix[1], { name: d.ix.name }); buildHouses(); }
+    S.builtIn = true;
+    afterLoad();
+  }
+  function lock() {
+    try { sessionStorage.removeItem(KEY_SLOT); } catch (e) { /* storage blocked */ }
+    $('pw').value = '';
+    $('gate').hidden = false;
+    $('pw').focus();
+  }
+  async function unlockWith(key, remember) {
+    applyBuiltIn(await openWith(key));
+    if (remember) { try { sessionStorage.setItem(KEY_SLOT, b64(await crypto.subtle.exportKey('raw', key))); } catch (e) { /* storage blocked */ } }
+    $('gate').hidden = true;
+  }
+  $('gateForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = $('unlock'), err = $('gateError');
+    btn.disabled = true;
+    btn.textContent = 'Unlocking…';
+    err.hidden = true;
+    try {
+      await unlockWith(await deriveKey($('pw').value), true);
+    } catch (x) {
+      err.textContent = 'That password didn’t work. Check it and try again.';
+      err.hidden = false;
+      $('pw').select();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Unlock';
+    }
   });
   let dragDepth = 0;
   const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
@@ -496,6 +554,8 @@
       ['Interactions', ix && `${fmt(ix.count)} interactions through ${day(ix.latest)}`],
     ].map(([what, st]) => `<li class="${st ? 'ok' : ''}"><i class="mark"></i><span class="what">${what}</span><span class="state">${st || 'Not loaded'}</span></li>`).join('');
     $('clearData').hidden = !(ps || ix);
+    $('clearData').textContent = S.builtIn && ENC ? 'Lock' : 'Clear loaded data';
+    $('loader').querySelector('h2').textContent = S.builtIn ? 'Campaign data' : 'Your campaign data';
 
     const win = total.ndp + 1;
     let h = '';
@@ -741,4 +801,12 @@
   if (phone()) setSheet(false);
   renderAll();
   applyTheme();
+  if (ENC) {
+    let saved = null;
+    try { saved = sessionStorage.getItem(KEY_SLOT); } catch (e) { /* storage blocked */ }
+    if (saved) {
+      crypto.subtle.importKey('raw', unb64(saved), { name: 'AES-GCM' }, true, ['decrypt'])
+        .then(key => unlockWith(key, false)).catch(lock);
+    } else lock();
+  }
 })();

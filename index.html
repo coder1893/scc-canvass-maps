@@ -15,6 +15,18 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
+<div class="gate" id="gate" hidden>
+  <form class="gate-card" id="gateForm" autocomplete="on">
+    <p class="eyebrow">Surrey City Centre · SRC</p>
+    <h1>Campaign map</h1>
+    <p>Team access. Enter the password you were given.</p>
+    <label for="pw">Password</label>
+    <input id="pw" name="password" type="password" autocomplete="current-password" spellcheck="false" required>
+    <button class="btn primary" type="submit" id="unlock">Unlock</button>
+    <p class="error" id="gateError" role="alert" hidden></p>
+    <p class="note">The campaign data on this page is encrypted. Without the password it can’t be read, even from the page source.</p>
+  </form>
+</div>
 <div class="app" id="app">
   <aside class="panel" aria-label="Campaign details">
     <header class="head">
@@ -89,6 +101,7 @@
 <script src="vendor/leaflet.js"></script>
 <script src="vendor/xlsx.full.min.js"></script>
 <script src="data/public.js"></script>
+<script src="data/campaign.enc.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
