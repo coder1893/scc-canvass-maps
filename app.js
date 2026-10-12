@@ -81,15 +81,15 @@
   const SHADES = [
     { k: 'result', label: '2024 result' },
     { k: 'support', label: 'Supporters found', needs: 'ps' },
-    { k: 'unknown', label: 'Not contacted', needs: 'ps' },
+    { k: 'unknown', label: 'No answer yet', needs: 'ps' },
     { k: 'skipped', label: 'Didn’t vote in 2024', needs: 'lists' },
   ];
   const ALPHA5 = [0.08, 0.2, 0.34, 0.5, 0.66];
   const STEPS = {
     support: { color: 'con', breaks: [0.02, 0.05, 0.10, 0.20, 0.35], alpha: [0.06, 0.16, 0.28, 0.42, 0.56, 0.70], get: r => r.supportPct, label: v => pct(v),
-      title: 'Supporters found, as a share of voters', note: 'From the Poll Summary.' },
+      title: 'Supporters found, as a share of people on file', note: 'From the Poll Summary.' },
     unknown: { color: 'ramp-contact', breaks: [0.5, 0.7, 0.85, 0.95], alpha: ALPHA5, get: r => r.unknown, label: v => pct(v), quantile: 0.01,
-      title: 'Voters not contacted yet', note: 'From the Poll Summary. Darker means more doors still to knock.' },
+      title: 'People with no support answer yet', note: 'From the Poll Summary’s “unknown” share. Darker means more people still to reach.' },
     skipped: { color: 'ramp-gotv', breaks: [10, 25, 50, 100], alpha: ALPHA5, get: r => r.not, label: v => fmt(v), quantile: 5, src: 'turnout',
       title: 'Supporters who didn’t vote in 2024', note: 'From the 2024 supporter lists. Darker means more people to remind to vote.' },
   };
@@ -155,7 +155,7 @@
     const r = S.ps && S.ps.rows.get(p.key), t = S.turnout && turnoutFor(p.key);
     const parts = [`<b>Poll ${p.code}</b>`];
     if (p.place) parts.push(`2024: ${leanText(lean(p.place.day))}`);
-    if (r) parts.push(`${fmt(r.support)} supporters`, `${pct(r.unknown)} not contacted`);
+    if (r) parts.push(`${fmt(r.support)} supporters`, `${pct(r.unknown)} no answer yet`);
     if (t) parts.push(`${fmt(t.not)} didn’t vote in 2024`);
     return parts.join(' · ');
   }
@@ -172,8 +172,8 @@
     let h = `<div class="pop"><h3>Poll ${p.code}</h3>`;
     if (r || t) {
       h += '<div class="grid">';
-      if (r) h += `<div><b>${fmt(r.support)}</b><span>supporters found (${pct(r.supportPct)} of ${fmt(r.reg)} voters)</span></div>
-        <div><b>${pct(r.unknown)}</b><span>not contacted yet</span></div>`;
+      if (r) h += `<div><b>${fmt(r.support)}</b><span>supporters found (${pct(r.supportPct, 1)} of ${fmt(r.pop)} people on file)</span></div>
+        <div><b>${pct(r.unknown)}</b><span>no support answer yet</span></div>`;
       if (t) h += `<div><b>${fmt(t.not)}</b><span>supporters didn’t vote in 2024${t.notPhone ? `, ${fmt(t.notPhone)} with a phone` : ''}</span></div>`;
       h += '</div>';
     } else h += `<p class="meta">${fmt(p.reg2024)} registered voters (2024)</p>`;
@@ -436,6 +436,9 @@
       const conShare = place ? place.day.con / valid(place.day) : ridingConShare;
       const row = { key, reg: num(r, 'Reg Voters'), hh: num(r, 'Households'), phones: num(r, 'Phones'), unknown: num(r, 'Cur Unknown Pct'),
         support: num(r, 'Cur Support'), supportPct: num(r, 'Cur Support Pct'), streets, conShare, onMap: pollByKey.has(key) };
+      // the export's percentages are shares of the people on file in the poll, which is more than the registered voters
+      const phonesPct = num(r, 'Phones Pct');
+      row.pop = row.supportPct ? row.support / row.supportPct : phonesPct ? row.phones / phonesPct : row.reg;
       row.find = row.reg * row.unknown * conShare;
       out.set(key, row);
     }
@@ -444,17 +447,20 @@
     const reg = counted.reduce((t, r) => t + r.reg, 0);
     return { name: file.name, rows: out,
       totals: { reg, hh: rowsArr.reduce((t, r) => t + r.hh, 0), phones: rowsArr.reduce((t, r) => t + r.phones, 0),
-        support: rowsArr.reduce((t, r) => t + r.support, 0), unknown: counted.reduce((t, r) => t + r.unknown * r.reg, 0) / (reg || 1) },
+        support: rowsArr.reduce((t, r) => t + r.support, 0), pop: rowsArr.reduce((t, r) => t + r.pop, 0),
+        noAnswer: rowsArr.reduce((t, r) => t + r.unknown * r.pop, 0),
+        get unknown() { return this.noAnswer / (this.pop || 1); } },
       asOf: (/(\d{4}-\d{2}-\d{2})/.exec(file.name) || [])[1] || '' };
   }
   function parseInteractions(rows, head, file) {
     const voters = new Map();
-    let count = 0, latest = '';
+    let count = 0, latest = '', earliest = '';
     for (const r of rows.slice(head + 1)) {
       if (!r || r[0] == null || !cell(r[6])) continue;
       count++;
       const date = isoDate(r[0]), addr = cell(r[4]);
       latest = date > latest ? date : latest;
+      if (date && (!earliest || date < earliest)) earliest = date;
       if (!addr) continue;
       const key = cell(r[1]) + '|' + addr;
       let v = voters.get(key);
@@ -480,7 +486,7 @@
       s.ls += v.lawnsign ? 1 : 0;
       if (v.last > s.last) s.last = v.last;
     }
-    return { name: file.name, count, latest, voters: voters.size, seeds: [...sites.values()].filter(s => Object.keys(s.n).length) };
+    return { name: file.name, count, latest, earliest, voters: voters.size, seeds: [...sites.values()].filter(s => Object.keys(s.n).length) };
   }
 
   // supporter turnout lists ("Yes, voted" / "Yes, not voted"): one row per supporter with poll and street address
@@ -565,6 +571,7 @@
       S.turnout = { byPoll, unplaced, mapped, noPoll, voted: sum('voted'), not: sum('not'), notPhone: sum('notPhone'), lists };
     }
     S.sites = [...sites.values()];
+    if (S.turnout) S.turnout.notInside = S.sites.reduce((t, s) => t + (s.p && !s.out ? s.notVoted : 0), 0);
   }
 
   function afterLoad() {
@@ -675,7 +682,7 @@
   // ------------------------------------------------------------------ overview
   function renderOverview() {
     const ps = S.ps, ix = S.ix, tv = S.turnout;
-    const loaded = [ps && `poll summary${ps.asOf ? ` (${day(ps.asOf)})` : ''}`, ix && `canvass to ${day(ix.latest)}`, tv && '2024 voting lists'].filter(Boolean);
+    const loaded = [ps && `poll summary${ps.asOf ? ` (${day(ps.asOf)})` : ''}`, ix && `canvass ${day(ix.earliest)} – ${day(ix.latest)}`, tv && '2024 voting lists'].filter(Boolean);
     $('loader').classList.toggle('done', loaded.length > 0);
     $('loaded').hidden = !loaded.length;
     $('loaded').textContent = loaded.length ? `Loaded: ${loaded.join(' · ')}` : '';
@@ -689,15 +696,12 @@
     if (ps || tv) {
       h += '<h2>This election</h2>';
       if (ps) {
-        const share = ps.totals.support / win;
-        h += `<div class="goal" role="img" aria-label="${fmt(ps.totals.support)} supporters found, ${pct(share)} of ${fmt(win)}">
-          <p class="hero"><b>${fmt(ps.totals.support)}</b> supporters found</p>
-          <div class="track"><span class="fill" style="width:${Math.min(100, share * 100)}%"></span></div>
-          <p><b>${pct(share)}</b> of the <b>${fmt(win)}</b> votes needed to win. The NDP won with ${fmt(total.ndp)} in 2024.</p></div>`;
+        h += `<div class="goal"><p class="hero"><b>${fmt(ps.totals.support)}</b> supporters found</p>
+          <p>The Poll Summary’s current support count${ps.asOf ? ` on ${day(ps.asOf)}` : ''}. For scale, the NDP won with ${fmt(total.ndp)} votes in 2024${tv ? `, and only ${pct(tv.voted / (tv.voted + tv.not))} of the supporters on the 2024 lists voted` : ''}.</p></div>`;
       }
       h += '<div class="kpis">';
-      if (ps) h += `<div class="kpi"><b>${pct(ps.totals.unknown)}</b><span>of voters not contacted yet</span></div>`;
-      if (tv) h += `<div class="kpi"><b>${fmt(tv.not)}</b><span>supporters didn’t vote in 2024</span></div>`;
+      if (ps) h += `<div class="kpi"><b>${fmt(ps.totals.pop - ps.totals.noAnswer)}</b><span>people have given a support answer (${pct(1 - ps.totals.unknown)} of the ${fmt(ps.totals.pop)} on file)</span></div>`;
+      if (tv) h += `<div class="kpi"><b>${fmt(tv.notInside)}</b><span>supporters living in the riding didn’t vote in 2024</span></div>`;
       h += '</div>';
       if (S.sites.length) h += `<div class="actions"><button type="button" class="btn primary" data-go="support">Map supporters</button>${tv ? '<button type="button" class="btn" data-go="skipped">Map 2024 non-voters</button>' : ''}</div>`;
     }
@@ -728,7 +732,7 @@
     { k: 'lean', label: '2024', get: r => r.lean ?? -999, show: r => r.lean == null ? '—' : chip(r.lean), r: true },
     { k: 'reg', label: 'Voters', get: r => r.reg, show: r => fmt(r.reg), r: true, when: () => !S.ps },
     { k: 'support', label: 'Supporters', get: r => r.support, show: r => fmt(r.support), r: true, when: () => !!S.ps },
-    { k: 'unknown', label: 'Not contacted', get: r => r.unknown, show: r => pct(r.unknown), r: true, when: () => !!S.ps },
+    { k: 'unknown', label: 'No answer', get: r => r.unknown, show: r => pct(r.unknown), r: true, when: () => !!S.ps },
     { k: 'skipped', label: 'Didn’t vote ’24', get: r => r.skipped, show: r => fmt(r.skipped), r: true, when: () => !!S.turnout },
   ];
   function pollRows() {
@@ -749,7 +753,7 @@
     $('pollHead').innerHTML = cols.map(c => `<th class="${c.r ? 'r' : ''}" ${c.k === sort.k ? `aria-sort="${sort.dir > 0 ? 'ascending' : 'descending'}"` : ''}><button type="button" data-k="${c.k}">${c.label}</button></th>`).join('');
     $('pollBody').innerHTML = rows.map(r => `<tr class="${r.onMap ? 'go' : ''}${r.key === S.sel ? ' sel' : ''}" ${r.onMap ? 'tabindex="0"' : ''} data-key="${esc(r.key)}">${cols.map(c => `<td class="${c.r ? 'r' : ''}">${c.show(r)}</td>`).join('')}</tr>`).join('');
     const notes = ['<b>2024</b> is the result at the poll’s 2024 voting place.'];
-    if (S.ps) notes.push('<b>Supporters</b> and <b>Not contacted</b> come from the Poll Summary.');
+    if (S.ps) notes.push('<b>Supporters</b> and <b>No answer</b> (share of people on file with no support answer) come from the Poll Summary.');
     if (S.turnout) notes.push('<b>Didn’t vote ’24</b> counts supporters on the 2024 didn’t-vote list.');
     notes.push('Click a column to sort, or a poll to see it on the map.');
     $('pollsNote').innerHTML = notes.join(' ');
