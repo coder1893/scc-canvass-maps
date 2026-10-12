@@ -712,7 +712,7 @@
         <div class="goal" role="img" aria-label="${fmt(tv.voted)} supporters voted, ${fmt(tv.not)} still to vote">
           <p class="hero"><b>${fmt(tv.not)}</b> supporters still to vote</p>
           <div class="track"><span class="fill" style="width:${(tv.voted / scale) * 100}%"></span><span class="fill rest" style="left:${(tv.voted / scale) * 100}%;width:${(tv.not / scale) * 100}%"></span><span class="tick" style="left:${(win / scale) * 100}%" title="Votes needed to beat the 2024 NDP total"></span></div>
-          <p><b>${fmt(tv.voted)}</b> have voted (${pct(tv.voted / listed)} of ${fmt(listed)} listed supporters). If everyone listed votes that is <b>${fmt(listed)}</b>, ${listed >= win ? `${fmt(listed - total.ndp)} more than` : `${fmt(win - listed)} short of`} the ${fmt(total.ndp)} votes that won in 2024 (tick). ${fmt(tv.notPhone)} of those still to vote have a phone number.</p>
+          <p><b>${fmt(tv.voted)}</b> have voted (${pct(tv.voted / listed)} of ${fmt(listed)} listed supporters). If everyone listed votes that is <b>${fmt(listed)}</b>, ${listed >= win ? `${fmt(listed - total.ndp)} more than` : `${fmt(win - listed)} short of`} the ${fmt(total.ndp)} votes that won in 2024 (the tick marks ${fmt(win)}, one more than that). ${fmt(tv.notPhone)} of those still to vote have a phone number.</p>
         </div>
         <button type="button" class="btn primary" id="goGotv" style="justify-self:start;margin-top:10px">Map supporters still to vote</button>`;
     }
@@ -733,9 +733,9 @@
         </div>`;
     }
     if (S.sites.length) {
-      const n = k => S.sites.filter(s => s.n[k]).length;
-      const supp = S.sites.filter(s => s.n.con || s.n.lean).length, opp = S.sites.filter(s => PRESETS.oppose.some(k => s.n[k])).length;
-      h += `<p class="note" style="margin-top:${ps ? 12 : 0}px">Households on the map: <b>${fmt(supp)}</b> supporting, <b>${fmt(opp)}</b> with other-party voters, <b>${fmt(n('und'))}</b> undecided. See the Households tab.</p>`;
+      const placed = S.sites.filter(s => s.p), n = k => placed.filter(s => s.n[k]).length;
+      const supp = placed.filter(s => s.n.con || s.n.lean).length, opp = placed.filter(s => PRESETS.oppose.some(k => s.n[k])).length;
+      h += `<p class="note" style="margin-top:${ps ? 12 : 0}px">Addresses on the map: <b>${fmt(supp)}</b> with supporters, <b>${fmt(opp)}</b> with other-party voters, <b>${fmt(n('und'))}</b> with undecided voters. An apartment building counts once. See the Households tab.</p>`;
     }
     $('canvass').innerHTML = h;
 
