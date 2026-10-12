@@ -2,71 +2,18 @@
 // Campaign map. Public map data comes from data/public.js; the Poll Summary and Interactions exports are read
 // in this tab with SheetJS and never leave it (the page's CSP blocks every outbound connection).
 (() => {
-  const P = window.PUBLIC_DATA;
-  const $ = id => document.getElementById(id);
+  const { P, $, fmt, pct, esc, day, reduced, phone, vaName, tok, lean, leanText, chip, RESULT_STEPS, RESULT_LABELS, classOf, sumWays, total, places, runs, polls, pollByKey, partyBars,
+    siteKey, prettyCivic, locate, inside, listAddress, cell, isoDate, sniff, pollKey, parsePollSummary, parseList, listKind, NO_POLL, listFromRows, readWorkbook,
+    ENC, gate, baseMap, placer, sheet } = SCC;
   const app = $('app');
-  const fmt = n => Math.round(n).toLocaleString('en-CA');
-  const pct = (x, d = 0) => (x * 100).toFixed(d) + '%';
-  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const pad = (n, w = 2) => String(n).padStart(w, '0');
-  const day = iso => iso ? new Date(iso + 'T12:00:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }) : '';
-  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const phone = () => matchMedia('(max-width: 760px)').matches;
-  const vaName = c => `${P.code} ${pad(c, 3)}`;
-
-  // ------------------------------------------------------------------ 2024 results (public)
-  const PARTIES = [['ndp', 'NDP'], ['con', 'Conservative'], ['grn', 'Green'], ['oth', 'Other']];
-  const valid = t => t.ndp + t.con + t.grn + t.oth;
-  const lean = t => (t.con - t.ndp) / valid(t) * 100;  // positive = Conservative ahead
-  const leanText = l => Math.abs(l) < 0.5 ? 'Even' : (l > 0 ? 'Con +' : 'NDP +') + Math.abs(l).toFixed(Math.abs(l) < 10 ? 1 : 0);
-  const leanVar = l => Math.abs(l) < 0.5 ? 'even' : l > 0 ? 'con' : 'ndp';
-  const chip = l => `<span class="chip" style="--chip:var(--${leanVar(l)})">${leanText(l)}</span>`;
-  const sumWays = keys => keys.reduce((t, k) => { const w = P.results.byWay[k]; if (w) for (const p in t) t[p] += w[p] || 0; return t; },
-    { ndp: 0, con: 0, grn: 0, oth: 0, rej: 0 });
-  const total = sumWays(Object.keys(P.results.byWay));
-  const ridingConShare = total.con / valid(total);
-  const places = P.results.places.filter(pl => pl.day);
-  const placeOf = {};
-  places.forEach(pl => pl.polls.forEach(c => { placeOf[c] = pl; }));
-  const runs = list => {  // [1,2,4,5,6] -> "1–2, 4–6"
-    const out = [];
-    list.forEach((n, i) => { if (i && n === list[i - 1] + 1) out[out.length - 1][1] = n; else out.push([n, n]); });
-    return out.map(([a, b]) => a === b ? a : `${a}–${b}`).join(', ');
-  };
-  const polls = P.polls.map(p => Object.assign(p, { key: String(p.code), place: placeOf[p.code], reg2024: P.registered[p.code] || 0 }));
-  const pollByKey = new Map(polls.map(p => [p.key, p]));
 
   // ------------------------------------------------------------------ state
   const S = { ps: null, ix: null, turnout: null, sites: [], view: 'support', shade: 'result', sel: null, sort: null };
 
   // ------------------------------------------------------------------ map
-  const map = L.map('map', { preferCanvas: true, zoomControl: false, minZoom: 12, maxZoom: 20, zoomSnap: 0.5 });
-  L.control.zoom({ position: 'topright' }).addTo(map);
-  map.attributionControl.setPrefix(false).addAttribution('Elections BC · BC Digital Road Atlas · BC Address Geocoder');
-  [['roads', 300], ['mask', 340], ['data', 400], ['pollLabels', 420], ['streetLabels', 430], ['places', 440], ['houseLabels', 460]]
-    .forEach(([name, z]) => { map.createPane(name).style.zIndex = z; });
-  ['roads', 'mask', 'pollLabels', 'streetLabels', 'places', 'houseLabels'].forEach(p => { map.getPane(p).style.pointerEvents = 'none'; });
-  const roadCanvas = L.canvas({ pane: 'roads', padding: 0.4 });
+  const { map, streetLabels, placeMarkers, styleBase, onTheme } = baseMap('map', [['roads', 300, true], ['mask', 340, true], ['data', 400],
+    ['pollLabels', 420, true], ['streetLabels', 430, true], ['places', 440, true], ['houseLabels', 460, true]]);
   const dataCanvas = L.canvas({ pane: 'data', padding: 0.4, tolerance: 3 });
-
-  const MAJOR = new Set(['freeway', 'highway', 'arterial', 'ramp']);
-  const WIDTH = { freeway: 4.5, highway: 4.5, arterial: 3.2, ramp: 2, collector: 2.4, local: 1.6, strata: 1.3, yield: 1.3 };
-  const DASH = new Set(['trail', 'recreation', 'pedestrian', 'resource']);
-  const byClass = {};
-  P.roads.forEach(([cls, flat]) => {
-    const line = [];
-    for (let i = 0; i < flat.length; i += 2) line.push([flat[i], flat[i + 1]]);
-    (byClass[cls] = byClass[cls] || []).push(line);
-  });
-  const roadLayers = Object.entries(byClass).map(([cls, lines]) => ({ cls, layer: L.polyline(lines, {
-    renderer: roadCanvas, pane: 'roads', interactive: false, lineCap: 'round', lineJoin: 'round', dashArray: DASH.has(cls) ? '3 4' : null }).addTo(map) }));
-  const world = [[-89, -179], [-89, 179], [89, 179], [89, -179]];
-  const mask = L.polygon([world, ...P.outline], { pane: 'mask', renderer: roadCanvas, stroke: false, interactive: false, fillOpacity: 0.55 }).addTo(map);
-  const outline = L.polygon(P.outline, { pane: 'mask', renderer: roadCanvas, fill: false, weight: 3, interactive: false }).addTo(map);
-  const streetLabels = L.layerGroup(P.streetLabels.map(([lat, lon, ang, i]) => L.marker([lat, lon], { pane: 'streetLabels', interactive: false, keyboard: false,
-    icon: L.divIcon({ className: 'street-label', iconSize: [0, 0], html: `<span style="transform: rotate(${ang}deg) translate(-50%, -50%)">${esc(P.names[i])}</span>` }) })));
-  const placeMarkers = L.layerGroup(places.filter(pl => pl.at).map(pl => L.marker(pl.at, { pane: 'places', interactive: false, keyboard: false,
-    icon: L.divIcon({ className: 'place-label', iconSize: [0, 0], html: `<i></i><span>${esc(pl.name)}</span>` }) })));
 
   // polls: one canvas with the households so a click hits the household on top first
   polls.forEach(p => {
@@ -105,9 +52,6 @@
       st.alpha = ALPHA5.slice(5 - st.breaks.length - 1);
     }
   }
-  const RESULT_STEPS = [[-Infinity, -10, 'ndp', 0.62], [-10, -5, 'ndp', 0.44], [-5, -2, 'ndp', 0.28], [-2, 2, 'even', 0.24],
-    [2, 5, 'con', 0.28], [5, 10, 'con', 0.44], [10, Infinity, 'con', 0.62]];
-  const classOf = (v, breaks) => breaks.filter(b => v >= b).length;
   function shadeOf(p) {
     if (S.shade === 'result') {
       if (!p.place) return null;
@@ -118,7 +62,6 @@
     const st = STEPS[S.shade], r = st && rowFor(st, p.key);
     return r ? { color: st.color, alpha: st.alpha[classOf(st.get(r), st.breaks)] } : null;
   }
-  const tok = n => getComputedStyle(app).getPropertyValue('--' + n).trim();
   function stylePoll(p) {
     const s = shadeOf(p), selected = S.sel === p.key;
     p.layer.setStyle({ color: selected ? tok('fg') : tok('va'), weight: selected ? 3 : 1, dashArray: selected ? null : '4 3',
@@ -133,7 +76,7 @@
     const swatches = (list, color) => `<div class="scale">${list.map(([c, a]) => `<span style="background:color-mix(in srgb, var(--${c || color}) ${a * 100}%, var(--land))"></span>`).join('')}</div>`;
     if (S.shade === 'result') {
       $('legend').innerHTML = `<h3>2024 result at each poll’s voting place</h3>${swatches(RESULT_STEPS.map(([, , c, a]) => [c, a]))}
-        <div class="scale-labels">${['NDP +10', '+5', '+2', 'Even', '+2', '+5', 'Con +10'].map(t => `<span>${t}</span>`).join('')}</div>
+        <div class="scale-labels">${RESULT_LABELS.map(t => `<span>${t}</span>`).join('')}</div>
         <p>Polls that voted at the same place share its colour.</p>`;
     } else {
       const st = STEPS[S.shade];
@@ -158,14 +101,6 @@
     if (r) parts.push(`${fmt(r.support)} supporters`, `${pct(r.unknown)} no answer yet`);
     if (t) parts.push(`${fmt(t.not)} didn’t vote in 2024`);
     return parts.join(' · ');
-  }
-  function partyBars(t, names) {
-    const v = valid(t);
-    return `<div class="bars">${PARTIES.map(([k, n]) => {
-      const who = names && P.results.candidates[k] ? `<small>${esc(P.results.candidates[k].map(c => c.name).join(', '))}</small>` : '';
-      return `<div class="bar-row"><span class="who">${n}${who}</span><span class="val"><b>${pct(t[k] / v, 1)}</b> · ${fmt(t[k])}</span>
-        <span class="track"><span class="fill" style="width:${(t[k] / v) * 100}%;background:var(--${k})"></span></span></div>`;
-    }).join('')}</div>`;
   }
   function pollCard(p) {
     const r = S.ps && S.ps.rows.get(p.key), t = S.turnout && turnoutFor(p.key), pl = p.place;
@@ -192,18 +127,12 @@
     const p = pollByKey.get(key);
     if (zoom && p) map.fitBounds(p.layer.getBounds(), { padding: [40, 40], animate: !reduced, maxZoom: 17 });
   }
+  map.on('popupopen', () => $('legend').classList.add('aside'));
+  map.on('popupclose', () => $('legend').classList.remove('aside'));
   map.on('popupclose', () => { if (S.sel) { S.sel = null; restylePolls(); document.querySelectorAll('#pollBody tr.sel').forEach(tr => tr.classList.remove('sel')); } });
 
   // ------------------------------------------------------------------ labels (polls, streets, households)
   const labels = L.layerGroup().addTo(map);
-  function placer() {
-    const boxes = [];
-    return (x, y, w, h) => {
-      for (const b of boxes) if (x < b[2] && x + w > b[0] && y < b[3] && y + h > b[1]) return false;
-      boxes.push([x, y, x + w, y + h]);
-      return true;
-    };
-  }
   function refreshLabels() {
     labels.clearLayers();
     const z = map.getZoom(), view = map.getBounds().pad(0.15);
@@ -274,75 +203,6 @@
   const countFor = s => s.shown ? viewOf().count(s) : 0;
   const radius = s => 4.5 + Math.min(5, Math.sqrt(Math.max(1, countFor(s))) - 1);
 
-  const ABBR = { AVENUE: 'AVE', AV: 'AVE', STREET: 'ST', ROAD: 'RD', DRIVE: 'DR', BOULEVARD: 'BLVD', CRESCENT: 'CRES', CRK: 'CRES', CR: 'CRES',
-    PLACE: 'PL', COURT: 'CRT', CT: 'CRT', HIGHWAY: 'HWY', PARKWAY: 'PKY', LANE: 'LANE', TERRACE: 'TERR', WAY: 'WAY', CIRCLE: 'CIR', GATE: 'GATE', EAST: 'E', WEST: 'W' };
-  const ALIAS = { 'KING GEORGE HWY': 'KING GEORGE BLVD' };
-  const TYPES = /\s(AVE|ST|RD|DR|BLVD|CRES|PL|CRT|HWY|PKY|WAY|LANE|TERR|CIR|GATE)$/;
-  const PRETTY = Object.fromEntries(P.names.filter(Boolean).map(n => [n.toUpperCase(), n]));
-  const BY_NAME = {};  // street name without its type, spaces removed -> address-list keys
-  Object.keys(P.addresses).forEach(k => { const n = k.replace(TYPES, '').replace(/ /g, ''); (BY_NAME[n] = BY_NAME[n] || []).push(k); });
-  function lev(a, b) {
-    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
-    for (let i = 1; i <= a.length; i++) {
-      const cur = [i];
-      for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] !== b[j - 1]));
-      prev = cur;
-    }
-    return prev[b.length];
-  }
-  const normCache = new Map();
-  function normStreet(raw) {  // '89Avenue', '140St', '90 A Ave', '100th Ave', 'Grosvener Rd' -> the address list's spelling
-    if (normCache.has(raw)) return normCache.get(raw);
-    let st = raw.toUpperCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
-    st = st.replace(/^(\d+)(?:TH|ND|RD)\b\s*/, '$1 ').replace(/^(\d+)ST\s+(ST|AVE)$/, '$1 $2');
-    st = st.replace(/^(\d+)\s?([A-Z]?)\s?(AVENUE|AVE|AV|STREET|ST)$/, '$1$2 $3');
-    st = st.split(' ').map(w => ABBR[w] || w).join(' ');
-    const bare = /^(\d+)([A-Z]?)$/.exec(st);
-    if (bare) st = `${st} ${+bare[1] < 125 ? 'AVE' : 'ST'}`;  // Surrey grid: avenues run low, streets high
-    st = ALIAS[st] || st;
-    if (!P.addresses[st]) {
-      const name = st.replace(TYPES, '').replace(/ /g, '');
-      let hits = BY_NAME[name] || [];
-      if (hits.length !== 1 && name.length >= 6 && !/^\d/.test(name)) {
-        hits = Object.entries(BY_NAME).filter(([n]) => !/^\d/.test(n) && lev(n, name) <= 2).flatMap(([, ks]) => ks);
-      }
-      if (hits.length === 1) st = hits[0];
-    }
-    normCache.set(raw, st);
-    return st;
-  }
-  const splitCivic = civic => /^(\d+)\s+(.+)$/.exec(civic.trim());
-  const siteKey = civic => { const m = splitCivic(civic); return m ? `${m[1]} ${normStreet(m[2])}` : civic.toUpperCase(); };
-  const prettyCivic = civic => { const m = splitCivic(civic); if (!m) return civic; const st = normStreet(m[2]); return `${m[1]} ${PRETTY[st] || m[2]}`; };
-  function locate(civic) {
-    const m = /^(\d+)\s+(.+)$/.exec(civic.trim());
-    if (!m) return null;
-    const n = +m[1], st = normStreet(m[2]);
-    const L_ = P.addresses[st];
-    if (!L_) return null;
-    let lo = null, hi = null;
-    for (const a of L_) {
-      if (a[0] === n) return { p: [a[1], a[2]], approx: false };
-      if (a[0] < n) lo = a; else if (!hi) hi = a;
-    }
-    if (lo && hi && hi[0] - lo[0] <= 120) {  // between two known numbers on the street: interpolate
-      const t = (n - lo[0]) / (hi[0] - lo[0]);
-      return { p: [lo[1] + (hi[1] - lo[1]) * t, lo[2] + (hi[2] - lo[2]) * t], approx: true };
-    }
-    const near = [lo, hi].filter(Boolean).sort((a, b) => Math.abs(a[0] - n) - Math.abs(b[0] - n))[0];
-    return near && Math.abs(near[0] - n) <= 30 ? { p: [near[1], near[2]], approx: true } : null;
-  }
-  function inside(pt, rings) {  // even-odd over all rings handles holes and multipart polygons
-    const [y, x] = pt;
-    let c = false;
-    for (const ring of rings) {
-      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-        const [yi, xi] = ring[i], [yj, xj] = ring[j];
-        if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c;
-      }
-    }
-    return c;
-  }
 
   const houseLayer = L.layerGroup().addTo(map);
   function buildHouses() {
@@ -403,55 +263,6 @@
   }
 
   // ------------------------------------------------------------------ reading the exports
-  const cell = v => v == null ? '' : String(v).trim();
-  function isoDate(v) {
-    if (v == null || v === '') return '';
-    if (typeof v === 'number') { const d = XLSX.SSF.parse_date_code(v); return `${d.y}-${pad(d.m)}-${pad(d.d)}`; }
-    if (v instanceof Date) return `${v.getFullYear()}-${pad(v.getMonth() + 1)}-${pad(v.getDate())}`;
-    const m = /(\d{4})-(\d{2})-(\d{2})/.exec(String(v));
-    return m ? m[0] : '';
-  }
-  function sniff(rows) {
-    for (let i = 0; i < Math.min(rows.length, 120); i++) {
-      const r = rows[i] || [];
-      if (cell(r[0]) === 'Poll' && r.some(v => cell(v) === 'Reg Voters')) return ['ps', i];
-      if (cell(r[0]) === 'Date' && cell(r[1]) === 'Voter') return ['ix', i];
-      if (r.some(v => cell(v) === 'Street') && r.some(v => cell(v) === 'Poll') && r.some(v => cell(v) === 'Voter_ID')) return ['list', i];
-    }
-    return [null, -1];
-  }
-  const pollKey = v => cell(v).replace(/^0+(?=\d)/, '').toUpperCase();
-  function parsePollSummary(rows, head, file) {
-    const H = rows[head].map(cell), col = n => H.indexOf(n);
-    const need = ['Poll', 'Reg Voters', 'Cur Unknown Pct', 'Cur Support', 'Cur Support Pct'];
-    const missing = need.filter(n => col(n) < 0);
-    if (missing.length) throw new Error(`${file.name} is missing the ${missing.join(', ')} column${missing.length > 1 ? 's' : ''}.`);
-    const num = (r, n) => col(n) < 0 ? 0 : (+r[col(n)] || 0);
-    const out = new Map();
-    for (const r of rows.slice(head + 1)) {
-      if (!r || r[col('Poll')] == null || cell(r[col('Poll')]) === '') continue;
-      const key = pollKey(r[col('Poll')]);
-      const streets = cell(r[col('Notes')]).split(/,\s*(?![^()]*\))/).map(t => /^(.*?)\s*\((\d+)\)$/.exec(t.trim())).filter(Boolean).map(m => ({ name: m[1], n: +m[2] }));
-      const place = placeOf[+key];
-      const conShare = place ? place.day.con / valid(place.day) : ridingConShare;
-      const row = { key, reg: num(r, 'Reg Voters'), hh: num(r, 'Households'), phones: num(r, 'Phones'), unknown: num(r, 'Cur Unknown Pct'),
-        support: num(r, 'Cur Support'), supportPct: num(r, 'Cur Support Pct'), streets, conShare, onMap: pollByKey.has(key) };
-      // the export's percentages are shares of the people on file in the poll, which is more than the registered voters
-      const phonesPct = num(r, 'Phones Pct');
-      row.pop = row.supportPct ? row.support / row.supportPct : phonesPct ? row.phones / phonesPct : row.reg;
-      row.find = row.reg * row.unknown * conShare;
-      out.set(key, row);
-    }
-    const rowsArr = [...out.values()];
-    const counted = rowsArr.filter(r => r.reg > 0);
-    const reg = counted.reduce((t, r) => t + r.reg, 0);
-    return { name: file.name, rows: out,
-      totals: { reg, hh: rowsArr.reduce((t, r) => t + r.hh, 0), phones: rowsArr.reduce((t, r) => t + r.phones, 0),
-        support: rowsArr.reduce((t, r) => t + r.support, 0), pop: rowsArr.reduce((t, r) => t + r.pop, 0),
-        noAnswer: rowsArr.reduce((t, r) => t + r.unknown * r.pop, 0),
-        get unknown() { return this.noAnswer / (this.pop || 1); } },
-      asOf: (/(\d{4}-\d{2}-\d{2})/.exec(file.name) || [])[1] || '' };
-  }
   function parseInteractions(rows, head, file) {
     const voters = new Map();
     let count = 0, latest = '', earliest = '';
@@ -489,29 +300,6 @@
     return { name: file.name, count, latest, earliest, voters: voters.size, seeds: [...sites.values()].filter(s => Object.keys(s.n).length) };
   }
 
-  // supporter turnout lists ("Yes, voted" / "Yes, not voted"): one row per supporter with poll and street address
-  function listAddress(raw) {
-    let a = cell(raw).replace(/\s+/g, ' ');
-    if (!a || /^(N\/?A|NULL|-)$/i.test(a)) return null;
-    a = a.replace(/^(unit|apt|suite|#)\s*[-#]?\s*/i, '');
-    const m = /^(?:([A-Za-z0-9]+)\s*-\s*)?(\d+)\s*(.*)$/.exec(a);
-    if (!m) return null;
-    const [, unit, n, rest] = m;
-    // '13465-90 Ave' or '13868-91 A' is house number, dash, numbered street
-    if (unit && /^\d{4,}$/.test(unit) && +n < 200 && /^([A-Za-z])?\s*(AVENUE|AVE|STREET|ST)?\.?$/i.test(rest.trim())) return { unit: '', civic: `${unit} ${n}${rest.trim()}` };
-    return rest.trim() ? { unit: unit || '', civic: `${n} ${rest.trim()}` } : null;
-  }
-  function parseList(rows, head, file, kind) {
-    const H = rows[head].map(cell), col = n => H.indexOf(n);
-    const people = [];
-    for (const r of rows.slice(head + 1)) {
-      if (!r || r.every(v => v == null || v === '')) continue;
-      const phone = cell(r[col('Phone')]);
-      people.push({ poll: pollKey(r[col('Poll')]), street: r[col('Street')], phone: !!phone && !/^null$/i.test(phone) });
-    }
-    return { kind, name: file.name, people };
-  }
-  const listKind = name => /not/i.test(name) ? 'not' : 'voted';
   function turnoutFor(key) {
     const t = S.turnout && S.turnout.byPoll;
     return t && (t.get(key) || t.get(key.replace(/S$/, '')));
@@ -530,7 +318,6 @@
       Object.assign(s, { polls: { ...seed.polls }, n: { ...seed.n }, units: seed.units, ls: seed.ls, last: seed.last, fromIx: true });
     }
     S.turnout = null;
-    const NO_POLL = new Set(['', '999']);  // the lists use 999 for "no poll assigned"
     const lists = [S.lists?.voted, S.lists?.not].filter(Boolean), entries = [];
     let unplaced = 0;
     for (const list of lists) {
@@ -584,8 +371,7 @@
     const errors = [];
     for (const f of files) {
       try {
-        const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
-        const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null, blankrows: false });
+        const rows = await readWorkbook(f);
         const [kind, head] = sniff(rows);
         if (kind === 'ps') S.ps = parsePollSummary(rows, head, f);
         else if (kind === 'ix') S.ix = parseInteractions(rows, head, f);
@@ -611,61 +397,15 @@
     if (ENC) lock();
   });
 
-  // ------------------------------------------------------------------ built-in data, encrypted with the team password
-  // data/campaign.enc.js holds AES-256-GCM ciphertext; the key is derived from the password with PBKDF2-SHA256.
-  // The derived key may be kept in sessionStorage so a reload in the same tab doesn't ask again; closing the tab drops it.
-  const ENC = window.CAMPAIGN_ENC;
-  const KEY_SLOT = 'campaign-map-key';
-  const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
-  const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
-  async function deriveKey(password) {
-    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
-    return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: unb64(ENC.salt), iterations: ENC.iterations },
-      base, { name: 'AES-GCM', length: 256 }, true, ['decrypt']);
-  }
-  async function openWith(key) {
-    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(ENC.iv) }, key, unb64(ENC.data));
-    const text = await new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
-    return JSON.parse(text);
-  }
+  // ------------------------------------------------------------------ built-in data, decrypted with the team password (core.js)
   function applyBuiltIn(d) {
     const ps = d.ps && sniff(d.ps.rows), ix = d.ix && sniff(d.ix.rows);
     if (ps && ps[0] === 'ps') S.ps = parsePollSummary(d.ps.rows, ps[1], { name: d.ps.name });
     if (ix && ix[0] === 'ix') S.ix = parseInteractions(d.ix.rows, ix[1], { name: d.ix.name });
-    for (const l of d.lists || []) {  // rows are [poll, street, has phone]
-      S.lists = { ...S.lists, [l.kind]: { kind: l.kind, name: l.name, people: l.rows.map(([poll, street, phone]) => ({ poll: pollKey(poll), street, phone: !!phone })) } };
-    }
+    for (const l of d.lists || []) S.lists = { ...S.lists, [l.kind]: listFromRows(l) };
     S.builtIn = true;
     afterLoad();
   }
-  function lock() {
-    try { sessionStorage.removeItem(KEY_SLOT); } catch (e) { /* storage blocked */ }
-    $('pw').value = '';
-    $('gate').hidden = false;
-    $('pw').focus();
-  }
-  async function unlockWith(key, remember) {
-    applyBuiltIn(await openWith(key));
-    if (remember) { try { sessionStorage.setItem(KEY_SLOT, b64(await crypto.subtle.exportKey('raw', key))); } catch (e) { /* storage blocked */ } }
-    $('gate').hidden = true;
-  }
-  $('gateForm').addEventListener('submit', async e => {
-    e.preventDefault();
-    const btn = $('unlock'), err = $('gateError');
-    btn.disabled = true;
-    btn.textContent = 'Unlocking…';
-    err.hidden = true;
-    try {
-      await unlockWith(await deriveKey($('pw').value), true);
-    } catch (x) {
-      err.textContent = 'That password didn’t work. Check it and try again.';
-      err.hidden = false;
-      $('pw').select();
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Unlock';
-    }
-  });
   let dragDepth = 0;
   const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
   addEventListener('dragenter', e => { if (hasFiles(e)) { dragDepth++; $('dropzone').hidden = false; } });
@@ -860,26 +600,15 @@
     selectTab(next);
     $('tab-' + next).focus();
   });
-  const sheetBtn = $('sheetToggle');
-  function setSheet(open) {
-    app.classList.toggle('collapsed', !open);
-    sheetBtn.textContent = open ? 'Hide' : 'Show';
-    sheetBtn.setAttribute('aria-expanded', open);
-  }
-  sheetBtn.addEventListener('click', () => setSheet(app.classList.contains('collapsed')));
+  const setSheet = sheet(app);
 
   // ------------------------------------------------------------------ theme
   function applyTheme() {
-    const z = map.getZoom(), k = z < 13.5 ? 0.55 : z < 15 ? 0.8 : z < 16.5 ? 1 : z < 18 ? 1.5 : 2.2;
-    roadLayers.forEach(({ cls, layer }) => layer.setStyle({ color: tok(MAJOR.has(cls) ? 'road-major' : 'road'), weight: (WIDTH[cls] || 1) * k }));
-    mask.setStyle({ fillColor: tok('mask') });
-    outline.setStyle({ color: tok('edge') });
+    styleBase();
     restylePolls();
     if (S.sites.length) { const c = tokens(); S.sites.forEach(s => { if (s.shown) styleHouse(s, c); }); }
   }
-  map.on('zoomend', applyTheme);
-  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
-  new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  onTheme(applyTheme);
 
   function renderAll() {
     renderShade();
@@ -891,16 +620,8 @@
   }
 
   $('eyebrow').textContent = `${P.riding} · ${P.code}`;
-  map.fitBounds(L.polygon(P.outline).getBounds(), { padding: [12, 12] });
   if (phone()) setSheet(false);
   renderAll();
   applyTheme();
-  if (ENC) {
-    let saved = null;
-    try { saved = sessionStorage.getItem(KEY_SLOT); } catch (e) { /* storage blocked */ }
-    if (saved) {
-      crypto.subtle.importKey('raw', unb64(saved), { name: 'AES-GCM' }, true, ['decrypt'])
-        .then(key => unlockWith(key, false)).catch(lock);
-    } else lock();
-  }
+  const lock = gate(applyBuiltIn);
 })();
