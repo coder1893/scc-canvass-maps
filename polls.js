@@ -556,10 +556,10 @@
   function planRoutes() {
     const t = turfs().find(x => x.id === $('turf').value);
     if (!t) return;
-    const o = knockOpts(), size = Math.max(10, Math.min(200, +$('perRoute').value || 40));
+    const o = knockOpts(), size = routeSize(), maxLen = +$('maxWalk').value;
     const doors = S.doors.filter(d => t.polls.has(d.poll) && targetsAt(d, o) > 0);
     const t0 = performance.now();
-    R.routes = WALK.plan(doors, size);
+    R.routes = WALK.plan(doors, size, { maxLen });
     R.turf = t; R.opts = o; R.sel = 0; R.ms = performance.now() - t0;
     R.routes.forEach((rt, i) => rt.doors.forEach((d, k) => { d.route = i; d.stop = k + 1; }));
     S.on.add('routes');
@@ -569,6 +569,7 @@
     renderLegend();
     if (R.routes.length) map.fitBounds(L.latLngBounds(doors.map(d => d.p)), { padding: [40, 40], animate: !reduced, maxZoom: 17 });
   }
+  const routeSize = () => Math.max(10, Math.min(200, +$('perRoute').value || 30));
   const hm = min => min < 60 ? `${Math.round(min)} min` : `${Math.floor(min / 60)} h ${String(Math.round(min % 60)).padStart(2, '0')}`;
   const km = m => (m / 1000).toFixed(1) + ' km';
   function whoAt(d, o = R.opts || KNOCK_GOTV) {
@@ -701,7 +702,7 @@
   let book = null;
   const SMALL_POLL = 15;  // polls with fewer doors than this share "X" routes instead of a trip each
   function buildBook() {
-    const o = knockOpts(), size = Math.max(10, Math.min(200, +$('perRoute').value || 40)), list = [];
+    const o = knockOpts(), size = routeSize(), maxLen = +$('maxWalk').value, list = [];
     const doorsIn = t => S.doors.filter(d => t.polls.has(d.poll) && targetsAt(d, o) > 0);
     const areas = [], small = [];
     for (const t of bookTurfs()) {
@@ -710,14 +711,14 @@
     const smallCodes = small.map(Number).sort((a, b) => a - b);
     if (small.length) areas.push({ id: 'x', label: `Other polls with few doors: ${runs(smallCodes)}`, polls: new Set(small) });
     for (const t of areas) {
-      const routes = WALK.plan(doorsIn(t), t.id === 'x' ? Math.ceil(size / 2) : size);  // scattered doors: shorter routes
+      const routes = WALK.plan(doorsIn(t), size, { maxLen });
       routes.forEach((rt, i) => list.push({ t, i, rt, of: routes.length, code: codeFor(t.id, i) }));
     }
     const what = [o.not && '2024 supporters who didn’t vote', o.voted && '2024 supporters who voted', o.now && 'supporters found this election'].filter(Boolean).join(', ')
       + (o.reg && S.hasReg ? ' (still on the voters list)' : '');
     const group = t => S.plan?.groups.find(g => 'g' + g.rank === t.id);
     const streetsOf = rt => [...new Set(rt.doors.map(d => d.civic.replace(/^\d+\s+/, '')))];
-    const json = { kind: 'route-book', built: new Date().toISOString().slice(0, 10), pollSummary: S.ps?.asOf || '', knock: what, perRoute: size,
+    const json = { kind: 'route-book', built: new Date().toISOString().slice(0, 10), pollSummary: S.ps?.asOf || '', knock: what, perRoute: size, maxWalkKm: maxLen / 1000,
       routes: list.map((b, n) => ({ id: b.code, order: n + 1, area: group(b.t) ? `Priority ${group(b.t).rank}` : b.t.id === 'x' ? 'Other polls' : `Poll ${b.t.id.slice(1)}`,
         place: group(b.t)?.place || '', polls: [...new Set(b.rt.doors.map(d => d.poll))].sort((x, y) => x - y), doors: b.rt.doors.length,
         people: b.rt.doors.reduce((t, d) => t + targetsAt(d, o), 0), km: +(b.rt.len / 1000).toFixed(1), minutes: Math.round(b.rt.minutes), streets: streetsOf(b.rt) })) };

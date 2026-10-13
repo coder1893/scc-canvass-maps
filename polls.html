@@ -32,7 +32,7 @@
       <p class="eyebrow" id="eyebrow">Surrey City Centre</p>
       <h1>Poll map</h1>
       <button class="sheet-toggle" id="sheetToggle" type="button" aria-expanded="true" aria-controls="panelBody">Hide</button>
-      <nav class="maps-nav" aria-label="Maps"><a href="index.html">Campaign map</a><a href="polls.html" aria-current="page">Poll map</a></nav>
+      <nav class="maps-nav" aria-label="Maps"><a href="index.html">Campaign map</a><a href="polls.html" aria-current="page">Poll map</a><a href="desk.html">Check-in desk</a></nav>
     </header>
     <div class="tabs" role="tablist" aria-label="Sections">
       <button type="button" role="tab" id="tab-map" aria-controls="pane-map" aria-selected="true">Map</button>
@@ -86,7 +86,11 @@
             <label><input type="checkbox" id="kNow"> Supporters found this election <small>(canvass export)</small></label>
             <label class="sub"><input type="checkbox" id="kReg" checked> Only people still on the voters list <small>(skips people who seem to have moved)</small></label>
           </fieldset>
-          <label class="field"><span>Doors per route</span><span class="inline"><input type="number" id="perRoute" min="10" max="200" step="5" value="40"><small>40 is about a two-hour shift</small></span></label>
+          <div class="two">
+            <label class="field"><span>Doors per route</span><span class="inline"><input type="number" id="perRoute" min="10" max="200" step="5" value="30"><small>at most</small></span></label>
+            <label class="field"><span>Longest walk per route</span><select id="maxWalk"><option value="1000">1 km</option><option value="1500" selected>1.5 km</option><option value="2000">2 km</option><option value="0">No limit</option></select></label>
+          </div>
+          <p class="note">Routes are compact blocks of streets. Where doors are far apart, a route gets fewer doors rather than a longer walk.</p>
           <button type="submit" class="btn primary">Plan routes</button>
         </form>
         <div id="routeOut" aria-live="polite"></div>

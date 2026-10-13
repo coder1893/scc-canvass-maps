@@ -1,8 +1,10 @@
 'use strict';
-// Door-knocking routes on the street network (BC Digital Road Atlas, without freeways and ramps). Doors are grouped into
-// street runs (one street, in house-number order; long streets go up one side and back down the other), runs are chained
-// by walking distance from the nearest unvisited run, the chain is shortened with 2-opt, and the result is cut into
-// routes of about the requested size at the widest gaps. Paths between doors follow the streets. Exposed as window.WALK.
+// Door-knocking routes on the street network (BC Digital Road Atlas, without freeways and ramps). The doors are first split
+// into compact blocks: halved across their longer side, at the widest gap near the middle, until each block holds about the
+// requested number of doors and its walk stays under the requested length. Inside a block, doors are grouped into street
+// runs (one street, in house-number order; long streets go up one side and back down the other), runs are chained by
+// walking distance from the nearest unvisited run, and the chain is shortened with 2-opt. Paths between doors follow the
+// streets. Exposed as window.WALK.
 window.WALK = (() => {
   const { P } = SCC;
   const LAT0 = 49.19, MY = 111132, MX = 111320 * Math.cos(LAT0 * Math.PI / 180);  // metres per degree here
@@ -214,20 +216,6 @@ window.WALK = (() => {
     }
     return seq;
   }
-  // cut the walk into routes of about `size` doors, each cut at the widest gap near the target
-  function cut(seq, size) {
-    const n = Math.max(1, Math.round(seq.length / size)), routes = [];
-    let from = 0;
-    for (let r = 1; r < n; r++) {
-      const target = Math.round(r * seq.length / n), lo = Math.max(from + 1, Math.round(target - size * 0.12)), hi = Math.min(seq.length - 1, Math.round(target + size * 0.12));
-      let at = target, gap = -1;
-      for (let i = lo; i <= hi; i++) { const g = metres(seq[i - 1].p, seq[i].p); if (g > gap) { gap = g; at = i; } }
-      routes.push(seq.slice(from, at));
-      from = at;
-    }
-    routes.push(seq.slice(from));
-    return routes.filter(r => r.length);
-  }
   const doorMinutes = d => DOOR_MIN + EXTRA_UNIT_MIN * Math.max(0, (d.unitCount || 1) - 1);
   function trace(doors) {  // the walk through doors in order
     let len = 0;
@@ -244,17 +232,59 @@ window.WALK = (() => {
     const minutes = len / WALK_M_PER_MIN + doors.reduce((t, d) => t + doorMinutes(d), 0);
     return { len, line, minutes };
   }
-  // the whole plan: doors in, routes out ({ doors, len, minutes, line }); start is an optional [lat, lon]
-  function plan(doors, size, start) {
+  // compact blocks of doors: split across the longer side until each block has about `size` doors and its walk along the
+  // streets is no longer than maxLen (small blocks are never split for length). Returns walked blocks.
+  const MIN_SPLIT = 12;  // a block this small is never split for length: its halves would be too small to be worth a trip
+  function blocks(doors, size, maxLen) {
+    const out = [];
+    const split = set => {
+      const n = set.length, parts = Math.max(1, Math.ceil(n / (size * 1.15)));
+      if (parts === 1) {
+        const ds = walkBlock(set, nw(set)), tr = trace(ds);
+        if (!maxLen || n < MIN_SPLIT || tr.len <= maxLen) { out.push({ ds, tr }); return; }
+      }
+      const halves = Math.max(2, parts), target = Math.round(n * Math.floor(halves / 2) / halves);
+      const ys = set.map(d => d.p[0] * MY), xs = set.map(d => d.p[1] * MX);
+      const wide = Math.max(...xs) - Math.min(...xs) >= Math.max(...ys) - Math.min(...ys);
+      const at = d => wide ? d.p[1] : d.p[0];
+      const sorted = [...set].sort((a, b) => at(a) - at(b) || a.num - b.num);
+      const win = Math.max(1, Math.round(n * 0.12));
+      let cutAt = target, gap = -1;
+      for (let i = Math.max(1, target - win); i <= Math.min(n - 1, target + win); i++) {
+        const g = Math.abs(at(sorted[i]) - at(sorted[i - 1]));
+        if (g > gap) { gap = g; cutAt = i; }
+      }
+      split(sorted.slice(0, cutAt));
+      split(sorted.slice(cutAt));
+    };
+    split(doors);
+    return out;
+  }
+  const nw = ds => [Math.max(...ds.map(d => d.p[0])), Math.min(...ds.map(d => d.p[1]))];
+  function walkBlock(ds, corner) {  // one route through a block
+    const runs = runsOf(ds);
+    const first = runs.reduce((b, r) => { const d = Math.min(metres(corner, r.first.p), metres(corner, r.last.p)); return !b || d < b.d ? { r, d } : b; }, null).r;
+    return improve(chainFrom(runs, first, corner).flat(), walkMatrix(ds));
+  }
+  // the whole plan: doors in, routes out ({ doors, len, minutes, line }). Blocks are numbered in a sweep from the north-west.
+  function plan(doors, size, opts = {}) {
     const placed = doors.filter(d => d.p);
     if (!placed.length) return [];
     placed.forEach(d => { d.s = d.s || snap(d.p) || { e: -1, t: 0, p: d.p, off: 0 }; });
-    const runs = runsOf(placed);
-    // by default start at the north-west corner of the doors and sweep
-    const corner = start || [Math.max(...placed.map(d => d.p[0])), Math.min(...placed.map(d => d.p[1]))];
-    const first = runs.reduce((b, r) => { const d = Math.min(metres(corner, r.first.p), metres(corner, r.last.p)); return !b || d < b.d ? { r, d } : b; }, null).r;
-    const dist = placed.length <= 800 ? walkMatrix(placed) : null;  // big areas: straight lines keep it quick
-    return cut(improve(chainFrom(runs, first, corner).flat(), dist), size).map(ds => ({ doors: ds, ...trace(ds) }));
+    const centre = ds => [ds.reduce((t, d) => t + d.p[0], 0) / ds.length, ds.reduce((t, d) => t + d.p[1], 0) / ds.length];
+    const left = blocks(placed, size, opts.maxLen).map(b => ({ ...b, c: centre(b.ds) }));
+    let here = nw(placed);
+    const routes = [];
+    while (left.length) {
+      let bi = 0;
+      left.forEach((b, i) => { if (metres(here, b.c) < metres(here, left[bi].c)) bi = i; });
+      const [b] = left.splice(bi, 1);
+      // walk the block from whichever end is nearer the last route
+      const flip = metres(here, b.ds.at(-1).p) < metres(here, b.ds[0].p), ds = flip ? [...b.ds].reverse() : b.ds;
+      routes.push({ doors: ds, ...(flip ? trace(ds) : b.tr) });
+      here = ds.at(-1).p;
+    }
+    return routes;
   }
   function chainFrom(runs, first, corner) {  // start with the run nearest the corner, entered from its nearer end
     const rev = metres(corner, first.last.p) < metres(corner, first.first.p);
