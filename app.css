@@ -414,6 +414,10 @@ fieldset.checks input { accent-color: var(--fg); }
   .walk .box { width: 6%; } .walk .notes { width: 22%; }
   .walk tr { break-inside: avoid; }
   .walk .foot { margin-top: 8px; font-size: 8.5pt; color: #444; }
+  .walk-map header { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 0 16px; }
+  .walk-map header p { grid-column: 1; }
+  .walk-map header .sign { grid-column: 2; grid-row: 1 / span 2; margin: 0 0 10px; font-size: 9.5pt; color: #000; }
+  .walk-map .route-map { display: block; width: 100%; height: auto; max-height: 82vh; font-family: Helvetica, Arial, sans-serif; }
   @page { margin: 12mm; }
 }
 

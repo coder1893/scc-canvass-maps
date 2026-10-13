@@ -583,13 +583,15 @@
     const doors = R.routes.reduce((t, r) => t + r.doors.length, 0), len = R.routes.reduce((t, r) => t + r.len, 0), min = R.routes.reduce((t, r) => t + r.minutes, 0);
     const people = R.routes.reduce((t, r) => t + r.doors.reduce((u, d) => u + targetsAt(d, R.opts), 0), 0);
     $('routeOut').innerHTML = `<p class="route-sum"><b>${fmt(doors)} doors</b> · ${fmt(people)} people · ${R.routes.length} route${R.routes.length > 1 ? 's' : ''} · ${km(len)} · about ${hm(min)} of knocking</p>
-      <div class="actions"><button type="button" class="btn" data-print="all">Print walk lists</button><button type="button" class="btn" data-csv="all">Download CSV</button>
+      <div class="actions"><button type="button" class="btn primary" data-pdf="all">Download route packets (PDF)</button>
+        <button type="button" class="btn" data-print="all">Print</button><button type="button" class="btn" data-csv="all">CSV</button>
         <button type="button" class="btn quiet" id="clearRoutes">Clear</button></div>
+      <p class="note">Each packet is a map of the route with numbered stops, then its house sheet: every door in order with Home, Not home, Ride and Voted boxes.</p>
       <ol class="route-list">${R.routes.map((rt, i) => `<li><button type="button" data-route="${i}" aria-pressed="${i === R.sel}"><span class="rn">${i + 1}</span>
         <span><b>${rt.doors.length} doors</b> · ${km(rt.len)} · ~${hm(rt.minutes)}<small>Starts at ${esc(rt.doors[0].civic)}, ends at ${esc(rt.doors.at(-1).civic)}</small></span></button>
-        <span class="route-acts"><button type="button" class="btn quiet" data-print="${i}">Print</button><button type="button" class="btn quiet" data-csv="${i}">CSV</button></span></li>`).join('')}</ol>
+        <span class="route-acts"><button type="button" class="btn quiet" data-pdf="${i}">PDF</button><button type="button" class="btn quiet" data-print="${i}">Print</button><button type="button" class="btn quiet" data-csv="${i}">CSV</button></span></li>`).join('')}</ol>
       <p class="note">Routes follow the streets: each street in house-number order, long streets up one side and back down the other, then on to the nearest next street.
-        Times assume walking at 4.5 km/h and about ${WALK.DOOR_MIN} minutes a door. The walk lists show addresses and who to ask for by type, not names.</p>`;
+        Times assume walking at 4.5 km/h and about ${WALK.DOOR_MIN} minutes a door. House sheets show addresses and who’s there by type, not names.</p>`;
   }
   function drawRoutes() {
     routeLayer.clearLayers();
@@ -616,12 +618,43 @@
       <p>${whoAt(d)}</p>${units.length ? `<p class="meta units">Units: ${units.slice(0, 40).map(u => `<span>${esc(u)}</span>`).join('')}${units.length > 40 ? ` +${units.length - 40} more` : ''}</p>` : ''}</div>`).openOn(map);
   }
   const pickRoutes = which => which === 'all' ? R.routes.map((rt, i) => [rt, i]) : [[R.routes[+which], +which]];
+  const unitsOf = d => [...d.units].sort((a, b) => a.localeCompare(b, 'en', { numeric: true })).join(', ');
+  const today = () => new Date().toLocaleDateString('en-CA', { month: 'short', day: 'numeric', year: 'numeric' });
+  const packetPlaces = () => (S.plan?.places || []).map(pl => ({ name: pl.name, hit: locate(pl.address) })).filter(pl => pl.hit).map(pl => ({ name: pl.name, p: pl.hit.p }));
+  const download = (blob, name) => {
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement('a'), { href: url, download: name });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  function pdfRoutes(which, btn) {
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Making the PDF…';
+    setTimeout(() => {  // let the button repaint first
+      try {
+        const items = pickRoutes(which).map(([rt, i]) => ({ rt, n: i + 1, of: R.routes.length }));
+        const meta = { area: R.turf.label, riding: P.riding, printed: today(), km, hm, who: d => whoAt(d), units: unitsOf };
+        download(PACKET.pdf(items, meta, packetPlaces()), `${P.code.toLowerCase()}-${R.turf.id}-route${which === 'all' ? 's' : '-' + (+which + 1)}.pdf`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = label;
+      }
+    }, 30);
+  }
   function printRoutes(which) {
-    const today = new Date().toLocaleDateString('en-CA', { month: 'short', day: 'numeric', year: 'numeric' });
-    $('print').innerHTML = pickRoutes(which).map(([rt, i]) => `<section class="walk">
-      <header><h1>Route ${i + 1} <span>of ${R.routes.length}</span></h1><p>${esc(R.turf.label)} · ${rt.doors.length} doors · ${km(rt.len)} · about ${hm(rt.minutes)} · printed ${today}</p></header>
+    const places = packetPlaces();
+    $('print').innerHTML = pickRoutes(which).map(([rt, i]) => `<section class="walk walk-map">
+      <header><h1>Route ${i + 1} <span>of ${R.routes.length}</span></h1><p>${esc(R.turf.label)} · ${rt.doors.length} doors · ${km(rt.len)} · about ${hm(rt.minutes)} · printed ${today()}</p>
+        <p class="sign">Canvasser ____________________ &nbsp; Date ____________</p></header>
+      ${PACKET.svg(PACKET.model(rt, places))}
+      <p class="foot">Start at the black circle (1) and follow the line. Numbers are the stops on the house sheet; “12–14” marks doors next to each other. Dashed grey lines are poll boundaries.</p></section>
+      <section class="walk">
+      <header><h1>Route ${i + 1} <span>house sheet</span></h1><p>${esc(R.turf.label)} · ${rt.doors.length} doors · ${km(rt.len)} · about ${hm(rt.minutes)} · printed ${today()}</p></header>
       <table><thead><tr><th class="n">#</th><th class="a">Address</th><th class="u">Units</th><th class="w">Who’s there</th><th class="box">Home</th><th class="box">Not home</th><th class="box">Ride</th><th class="box">Voted</th><th class="notes">Notes</th></tr></thead>
-      <tbody>${rt.doors.map((d, k) => `<tr><td>${k + 1}</td><td><b>${esc(d.civic)}</b></td><td>${esc([...d.units].sort((a, b) => a.localeCompare(b, 'en', { numeric: true })).join(', '))}</td>
+      <tbody>${rt.doors.map((d, k) => `<tr><td>${k + 1}</td><td><b>${esc(d.civic)}</b></td><td>${esc(unitsOf(d))}</td>
         <td>${whoAt(d)}</td><td class="box"></td><td class="box"></td><td class="box"></td><td class="box"></td><td class="notes"></td></tr>`).join('')}</tbody></table>
       <p class="foot">${esc(P.riding)} · confidential campaign list · return it to the office</p></section>`).join('');
     window.print();
@@ -633,12 +666,7 @@
     for (const [rt, i] of pickRoutes(which)) rt.doors.forEach((d, k) => rows.push([i + 1, k + 1, d.civic, [...d.units].join(' '), d.poll,
       R.opts.not ? (free(d) ? d.not : d.notReg) : '', R.opts.not ? d.phoneNot : '', R.opts.voted ? (free(d) ? d.voted : d.votedReg) : '', R.opts.now ? d.now : '',
       d.approx ? 'estimated' : 'address point', d.p[0].toFixed(5), d.p[1].toFixed(5)]));
-    const url = URL.createObjectURL(new Blob([rows.map(r => r.map(q).join(',')).join('\n')], { type: 'text/csv' }));
-    const a = Object.assign(document.createElement('a'), { href: url, download: `${P.code.toLowerCase()}-${R.turf.id}-route${which === 'all' ? 's' : '-' + (+which + 1)}.csv` });
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    download(new Blob([rows.map(r => r.map(q).join(',')).join('\n')], { type: 'text/csv' }), `${P.code.toLowerCase()}-${R.turf.id}-route${which === 'all' ? 's' : '-' + (+which + 1)}.csv`);
   }
   $('routeForm').addEventListener('submit', e => { e.preventDefault(); planRoutes(); });
   $('routeForm').addEventListener('change', e => { if (R.turf && e.target.id !== 'turf') planRoutes(); });
@@ -646,6 +674,7 @@
     const b = e.target.closest('button');
     if (!b) return;
     if (b.id === 'clearRoutes') { clearRoutes(); renderSwitches(); renderLegend(); return; }
+    if (b.dataset.pdf) return pdfRoutes(b.dataset.pdf, b);
     if (b.dataset.print) return printRoutes(b.dataset.print);
     if (b.dataset.csv) return csvRoutes(b.dataset.csv);
     if (b.dataset.route) {
