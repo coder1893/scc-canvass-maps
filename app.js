@@ -3,7 +3,7 @@
 // in this tab with SheetJS and never leave it (the page's CSP blocks every outbound connection).
 (() => {
   const { P, $, fmt, pct, esc, day, reduced, phone, vaName, tok, lean, leanText, chip, RESULT_STEPS, RESULT_LABELS, classOf, sumWays, total, places, runs, polls, pollByKey, partyBars,
-    siteKey, prettyCivic, locate, inside, listAddress, cell, isoDate, sniff, pollKey, parsePollSummary, parseList, listKind, NO_POLL, listFromRows, readWorkbook,
+    siteKey, prettyCivic, locate, inside, listAddress, sniff, pollKey, parsePollSummary, parseInteractions, parseList, listKind, NO_POLL, listFromRows, readWorkbook,
     ENC, gate, baseMap, placer, sheet } = SCC;
   const app = $('app');
 
@@ -171,8 +171,6 @@
   map.on('zoomend moveend', refreshLabels);
 
   // ------------------------------------------------------------------ households
-  const CATEGORY = { 'Conservative': 'con', 'Conservative-Leaning': 'lean', 'NDP': 'ndp', 'NDP-Leaning': 'ndp_lean', 'Green': 'grn',
-    'Independent': 'oth', 'Other': 'oth', 'Undecided': 'und', 'Will Not Say': 'und', 'Unknown': 'und', 'Do Not Contact': 'dnc' };
   const SUPPORT = ['con', 'lean', 'sup24'], OPPOSE = ['ndp', 'ndp_lean', 'grn', 'oth'];
   const sumOf = (s, ks) => ks.reduce((t, k) => t + (s.n[k] || 0), 0);
   const VIEWS = [  // one choice at a time: what the dots on the map are
@@ -263,42 +261,6 @@
   }
 
   // ------------------------------------------------------------------ reading the exports
-  function parseInteractions(rows, head, file) {
-    const voters = new Map();
-    let count = 0, latest = '', earliest = '';
-    for (const r of rows.slice(head + 1)) {
-      if (!r || r[0] == null || !cell(r[6])) continue;
-      count++;
-      const date = isoDate(r[0]), addr = cell(r[4]);
-      latest = date > latest ? date : latest;
-      if (date && (!earliest || date < earliest)) earliest = date;
-      if (!addr) continue;
-      const key = cell(r[1]) + '|' + addr;
-      let v = voters.get(key);
-      if (!v) voters.set(key, v = { addr, poll: pollKey(r[3]), support: null, sdate: '', lawnsign: false, last: '' });
-      if (date > v.last) v.last = date;
-      const field = cell(r[6]), sp = field.indexOf(' '), f = sp < 0 ? field : field.slice(0, sp), val = sp < 0 ? '' : field.slice(sp + 1);
-      if (f === 'Support' && date > v.sdate) { v.support = val; v.sdate = date; }  // newest first: ties keep the first row
-      else if (f === 'LawnSign' && val === 'Yes') v.lawnsign = true;
-    }
-    const sites = new Map();
-    for (const v of voters.values()) {
-      const a = v.addr.replace(/\s+/g, ' ').trim();
-      let unit = '', civic = a;
-      if (a.startsWith('- ') || a.includes(' - ')) { const i = a.indexOf('- '); unit = a.slice(0, i).replace(/[\s-]+$/, ''); civic = a.slice(i + 2).trim(); }
-      const cat = CATEGORY[v.support] || (v.lawnsign ? 'con' : null);  // a sign request with no answer yet counts as support
-      const k = siteKey(civic);
-      let s = sites.get(k);
-      if (!s) sites.set(k, s = { key: k, civic: prettyCivic(civic), polls: {}, n: {}, units: new Map(), ls: 0, last: '' });
-      s.polls[v.poll] = (s.polls[v.poll] || 0) + 1;
-      if (cat) s.n[cat] = (s.n[cat] || 0) + 1;
-      if (!s.units.has(unit)) s.units.set(unit, {});
-      if (cat) s.units.get(unit)[cat] = (s.units.get(unit)[cat] || 0) + 1;
-      s.ls += v.lawnsign ? 1 : 0;
-      if (v.last > s.last) s.last = v.last;
-    }
-    return { name: file.name, count, latest, earliest, voters: voters.size, seeds: [...sites.values()].filter(s => Object.keys(s.n).length) };
-  }
 
   function turnoutFor(key) {
     const t = S.turnout && S.turnout.byPoll;

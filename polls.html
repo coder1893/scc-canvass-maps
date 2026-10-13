@@ -26,7 +26,7 @@
     <p class="note">The campaign data on this page is encrypted. Without the password it can’t be read, even from the page source.</p>
   </form>
 </div>
-<div class="app" id="app">
+<div class="app wide" id="app">
   <aside class="panel" aria-label="Poll details">
     <header class="head">
       <p class="eyebrow" id="eyebrow">Surrey City Centre</p>
@@ -34,36 +34,63 @@
       <button class="sheet-toggle" id="sheetToggle" type="button" aria-expanded="true" aria-controls="panelBody">Hide</button>
       <nav class="maps-nav" aria-label="Maps"><a href="index.html">Campaign map</a><a href="polls.html" aria-current="page">Poll map</a></nav>
     </header>
+    <div class="tabs" role="tablist" aria-label="Sections">
+      <button type="button" role="tab" id="tab-map" aria-controls="pane-map" aria-selected="true">Map</button>
+      <button type="button" role="tab" id="tab-focus" aria-controls="pane-focus" aria-selected="false" tabindex="-1">Focus</button>
+      <button type="button" role="tab" id="tab-routes" aria-controls="pane-routes" aria-selected="false" tabindex="-1">Routes</button>
+    </div>
     <div class="body" id="panelBody">
-      <div class="pane">
-        <section id="summary" aria-live="polite"></section>
-        <section class="layers-panel">
+      <section class="pane" id="pane-map" role="tabpanel" aria-labelledby="tab-map">
+        <div id="summary" aria-live="polite"></div>
+        <div class="layers-panel">
           <h2>Show on the map</h2>
           <fieldset class="switches" id="fills"><legend>Colour the polls by <span class="aside">one at a time</span></legend></fieldset>
           <fieldset class="switches" id="overlays"><legend>On each poll</legend></fieldset>
-        </section>
-        <section>
-          <h2>Polls</h2>
-          <p class="note" id="pollsNote"></p>
-          <div class="table-wrap">
-            <table class="polls" id="pollTable">
-              <thead><tr id="pollHead"></tr></thead>
-              <tbody id="pollBody"></tbody>
-              <tfoot id="pollFoot"></tfoot>
-            </table>
-          </div>
-        </section>
-        <section class="loader done" id="loader">
+        </div>
+        <div class="loader done" id="loader">
           <p class="loaded" id="loaded" hidden></p>
           <div class="load-row">
-            <label class="btn" for="files" id="chooseLabel">Load a newer Poll Summary</label>
+            <label class="btn" for="files" id="chooseLabel">Load newer files</label>
             <input id="files" type="file" accept=".xlsx,.xls,.csv" multiple>
             <button type="button" class="btn quiet" id="lockBtn">Lock</button>
           </div>
-          <p class="note">A file you load opens in this browser only and is never uploaded. Closing the tab clears it.</p>
+          <p class="note">A Poll Summary, Interactions export or 2024 list you load opens in this browser only and is never uploaded. Closing the tab clears it.</p>
           <p class="error" id="loadError" role="alert" hidden></p>
-        </section>
-      </div>
+        </div>
+      </section>
+      <section class="pane" id="pane-focus" role="tabpanel" aria-labelledby="tab-focus" hidden>
+        <div class="focus-head">
+          <h2>Where to focus door knocking</h2>
+          <div class="seg" id="order" role="group" aria-label="Order" hidden>
+            <button type="button" data-order="score" aria-pressed="true">By focus score</button>
+            <button type="button" data-order="plan" aria-pressed="false">Party plan first</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="polls focus" id="pollTable">
+            <thead><tr id="pollHead"></tr></thead>
+            <tbody id="pollBody"></tbody>
+            <tfoot id="pollFoot"></tfoot>
+          </table>
+        </div>
+        <div id="pollsNote"></div>
+      </section>
+      <section class="pane" id="pane-routes" role="tabpanel" aria-labelledby="tab-routes" hidden>
+        <p class="note" id="routesEmpty">Unlock the campaign data, or load the 2024 lists or the Interactions export, to plan door-knocking routes.</p>
+        <form class="route-form" id="routeForm" hidden>
+          <h2>Door-knocking routes</h2>
+          <label class="field"><span>Area</span><select id="turf"></select></label>
+          <fieldset class="checks"><legend>Knock on doors with</legend>
+            <label><input type="checkbox" id="kNot" checked> 2024 supporters who didn’t vote</label>
+            <label><input type="checkbox" id="kVoted"> 2024 supporters who voted</label>
+            <label><input type="checkbox" id="kNow"> Supporters found this election <small>(canvass export)</small></label>
+            <label class="sub"><input type="checkbox" id="kReg" checked> Only people still on the voters list <small>(skips people who seem to have moved)</small></label>
+          </fieldset>
+          <label class="field"><span>Doors per route</span><span class="inline"><input type="number" id="perRoute" min="10" max="200" step="5" value="40"><small>40 is about a two-hour shift</small></span></label>
+          <button type="submit" class="btn primary">Plan routes</button>
+        </form>
+        <div id="routeOut" aria-live="polite"></div>
+      </section>
     </div>
   </aside>
   <div class="mapwrap">
@@ -71,11 +98,13 @@
     <div class="legend" id="legend" aria-live="polite"></div>
   </div>
 </div>
+<div id="print" class="print-only"></div>
 <script src="vendor/leaflet.js"></script>
 <script src="vendor/xlsx.full.min.js"></script>
 <script src="data/public.js"></script>
 <script src="data/campaign.enc.js"></script>
 <script src="core.js"></script>
+<script src="routes.js"></script>
 <script src="polls.js"></script>
 </body>
 </html>

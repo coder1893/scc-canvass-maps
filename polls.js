@@ -1,19 +1,21 @@
 'use strict';
 // Poll map: every poll with its supporters now (the Poll Summary's current support) and its supporters on the 2024 lists,
-// what that comparison says, how much of the poll hasn't answered yet, the 2024 result and the GOTV ride plan.
-// Each layer switches on and off on its own; the poll colouring is one choice at a time.
+// what that comparison says, how much of the poll hasn't answered yet, the 2024 result and the GOTV ride plan; a focus
+// ranking of the polls; and door-knocking routes (routes.js). Each layer switches on and off on its own; the poll
+// colouring is one choice at a time.
 (() => {
   const { P, $, fmt, pct, esc, day, reduced, phone, tok, lean, chip, RESULT_STEPS, RESULT_LABELS, classOf, runs, polls, pollByKey,
-    partyBars, locate, pollAt, listAddress, sniff, pollKey, parsePollSummary, parseList, listKind, NO_POLL, listFromRows, readWorkbook,
-    ENC, gate, baseMap, placer, sheet } = SCC;
+    partyBars, normStreet, siteKey, prettyCivic, locate, pollAt, listAddress, sniff, pollKey, parsePollSummary, parseInteractions, parseList,
+    listKind, NO_POLL, listFromRows, readWorkbook, ENC, gate, baseMap, placer, sheet } = SCC;
   const app = $('app');
 
-  const S = { ps: null, lists: null, plan: null, t: null, rows: new Map(), extra: [], fill: 'now',
-    on: new Set(['numbers', 'counts', 'plan', 'streets']), sel: null, sort: null, builtIn: false };
+  const S = { ps: null, ix: null, lists: null, plan: null, t: null, rows: new Map(), doors: [], unchecked: new Set(), focus: new Map(),
+    fill: 'now', on: new Set(['numbers', 'counts', 'plan', 'streets', 'routes']), sel: null, sort: null, builtIn: false };
+  const R = { routes: [], sel: 0, turf: null };  // the door-knocking routes on the map
 
   // ------------------------------------------------------------------ map
   const { map, streetLabels, placeMarkers, styleBase, onTheme } = baseMap('map', [['roads', 300, true], ['mask', 340, true], ['data', 400],
-    ['plan', 410, true], ['marks', 420, true], ['streetLabels', 430, true], ['places', 440, true], ['tags', 460, true]]);
+    ['plan', 410, true], ['routes', 415, true], ['marks', 420, true], ['streetLabels', 430, true], ['places', 440, true], ['tags', 460, true], ['doors', 465]]);
   const dataCanvas = L.canvas({ pane: 'data', padding: 0.4, tolerance: 3 });
   const planCanvas = L.canvas({ pane: 'plan', padding: 0.4 });
   const markCanvas = L.canvas({ pane: 'marks', padding: 0.4 });
@@ -28,6 +30,9 @@
   const planLayer = L.layerGroup();
   const planBadges = L.layerGroup();  // a priority number per group, shown when the poll labels (which carry it) are off
   const tags = L.layerGroup().addTo(map);
+  const routeCanvas = L.canvas({ pane: 'routes', padding: 0.4 });
+  const doorCanvas = L.canvas({ pane: 'doors', padding: 0.4, tolerance: 5 });
+  const routeLayer = L.layerGroup().addTo(map);
 
   // ------------------------------------------------------------------ per-poll numbers
   // 2024 supporters per poll: people on the voted and didn't-vote lists. A person listed without a poll (999) takes the poll
@@ -71,6 +76,88 @@
     }
   }
   const rowOf = key => S.rows.get(key);
+
+  // ------------------------------------------------------------------ doors: one per address, with who lives there
+  // From the 2024 lists (and whether each person is still on the voters list) and the supporters in the canvass export.
+  function buildDoors() {
+    const doors = new Map();
+    const get = civic => {
+      const key = siteKey(civic);
+      let d = doors.get(key);
+      if (!d) doors.set(key, d = { key, civic: prettyCivic(civic), units: new Set(), not: 0, notReg: 0, voted: 0, votedReg: 0, now: 0, phoneNot: 0 });
+      return d;
+    };
+    for (const list of [S.lists?.voted, S.lists?.not].filter(Boolean)) {
+      for (const person of list.people) {
+        const a = listAddress(person.street);
+        if (!a) continue;
+        const d = get(a.civic), reg = person.reg !== false;  // without the voters file everyone counts as registered
+        if (a.unit) d.units.add(a.unit);
+        if (list.kind === 'not') { d.not++; if (reg) d.notReg++; if (person.phone) d.phoneNot++; } else { d.voted++; if (reg) d.votedReg++; }
+      }
+    }
+    for (const seed of S.ix?.seeds || []) {
+      const sup = (seed.n.con || 0) + (seed.n.lean || 0);
+      if (!sup) continue;
+      const d = get(seed.civic);
+      d.now += sup;
+      for (const u of seed.units.keys()) if (u) d.units.add(u);
+    }
+    S.doors = [];
+    for (const d of doors.values()) {
+      const hit = locate(d.civic), m = /^(\d+)\s+(.+)$/.exec(d.civic);
+      if (!hit || !m) continue;
+      const poll = pollAt(hit.p);
+      if (poll == null) continue;  // outside the riding
+      Object.assign(d, { p: hit.p, approx: hit.approx, poll: String(poll), num: +m[1], street: normStreet(m[2]), unitCount: Math.max(1, d.units.size) });
+      S.doors.push(d);
+    }
+    // polls the voters-by-last-name file doesn't cover at all (poll 27): don't drop their people as "moved"
+    S.hasReg = !!S.lists && [S.lists.voted, S.lists.not].some(l => l?.people.some(x => x.reg != null));
+    S.unchecked = new Set();
+    if (S.hasReg) {
+      const by = new Map();
+      for (const d of S.doors) { const t = by.get(d.poll) || [0, 0]; t[0] += d.not + d.voted; t[1] += d.notReg + d.votedReg; by.set(d.poll, t); }
+      for (const [k, [all, reg]] of by) if (all >= 20 && reg === 0) S.unchecked.add(k);
+    }
+  }
+  const KNOCK_GOTV = { not: true, voted: false, now: false, reg: true };
+  function targetsAt(d, o) {
+    const free = !o.reg || S.unchecked.has(d.poll);
+    return (o.not ? (free ? d.not : d.notReg) : 0) + (o.voted ? (free ? d.voted : d.votedReg) : 0) + (o.now ? d.now : 0);
+  }
+
+  // ------------------------------------------------------------------ focus ranking
+  // 2024 supporters still on the voters list who didn't vote count 1 each (the votes a knock can add); supporters found
+  // this election count half (they need a reminder too, many already vote, and some are the same people).
+  function computeFocus() {
+    S.focus = new Map();
+    if (!S.lists && !S.ps) return;
+    const doorsBy = new Map();
+    for (const d of S.doors) if (targetsAt(d, KNOCK_GOTV)) (doorsBy.get(d.poll) || doorsBy.set(d.poll, []).get(d.poll)).push(d);
+    const list = polls.map(p => {
+      const ds = doorsBy.get(p.key) || [], skipped = ds.reduce((t, d) => t + targetsAt(d, KNOCK_GOTV), 0), now = rowOf(p.key)?.now ?? 0;
+      const est = WALK.estimate(ds);
+      return { key: p.key, skipped, now, score: skipped + now / 2, doors: ds.length, hours: est.minutes / 60, unchecked: S.unchecked.has(p.key) };
+    }).sort((a, b) => b.score - a.score || +a.key - +b.key);
+    list.forEach((f, i) => { f.rank = i + 1; f.ds = doorsBy.get(f.key) || []; S.focus.set(f.key, f); });
+    refineHours();
+  }
+  // replace the quick estimates with the route planner's own walk, a poll at a time so the page stays responsive
+  let refining = 0;
+  function refineHours() {
+    const run = ++refining, queue = [...S.focus.values()].filter(f => f.ds.length);
+    const step = () => {
+      if (run !== refining) return;  // newer data arrived
+      const f = queue.shift();
+      if (!f) { if (!$('pane-focus').hidden) renderTable(); return; }
+      const one = WALK.plan(f.ds, 1e9)[0];
+      if (one) f.hours = one.minutes / 60;
+      if (!queue.length || queue.length % 10 === 0) if (!$('pane-focus').hidden) renderTable();
+      setTimeout(step, 0);
+    };
+    setTimeout(step, 50);
+  }
   const both = r => r && r.now != null && r.y24 != null;
 
   // what's going on: supporters now against the 2024 lists
@@ -109,6 +196,9 @@
     { k: 'ratio', label: 'Now compared with 2024', sub: 'Supporters now as a share of 2024', color: 'ramp-find', breaks: [0.25, 0.5, 0.75, 1], alpha: ALPHA5,
       get: r => both(r) && r.y24 >= 10 ? r.now / r.y24 : null, edges: pctEdges, needs: () => !!(S.ps && S.t),
       note: 'Darker is closer to (or past) the 2024 count. Uncoloured polls had fewer than 10 supporters on the 2024 lists.' },
+    { k: 'focus', label: 'Focus score', sub: 'Where door knocking can add the most votes', color: 'sign', breaks: [25, 50, 100, 150, 200], alpha: ALPHA6,
+      get: r => S.focus.get(r.key)?.score ?? null, edges: countEdges, needs: () => S.focus.size > 0,
+      note: 'Registered 2024 supporters who didn’t vote, plus half the supporters found now. The Focus tab ranks the polls.' },
     { k: 'unknown', label: 'No answer yet', sub: 'People on file without a support answer', color: 'ramp-contact', breaks: [0.6, 0.7, 0.8, 0.9], alpha: ALPHA5,
       get: r => r.unknown, edges: pctEdges, needs: () => !!S.ps, note: 'Darker means more people still to reach.' },
     { k: 'result', label: '2024 result', sub: 'Election day at the poll’s 2024 voting place', needs: () => true,
@@ -230,6 +320,7 @@
     { k: 'dots', label: 'Circles: supporters now', sub: 'Size shows the count', glyph: '<span class="g-dot"></span>', needs: () => !!S.ps },
     { k: 'rings', label: 'Rings: 2024 supporters', sub: 'Same size scale as the circles', glyph: '<span class="g-ring"></span>', needs: () => !!S.t },
     { k: 'plan', label: 'GOTV ride plan', sub: 'Priority polls and where they’re sent', glyph: '<span class="g-plan">1</span>', needs: () => !!S.plan },
+    { k: 'routes', label: 'Door-knocking routes', sub: 'From the Routes tab', glyph: '<span class="g-route"></span>', needs: () => R.routes.length > 0 },
     { k: 'places', label: '2024 voting places', glyph: '<span class="g-place"></span>' },
     { k: 'streets', label: 'Street names', sub: 'When zoomed in', glyph: '<span class="g-street">Ave</span>' },
   ];
@@ -251,6 +342,7 @@
       if (box.checked) S.on.add(box.dataset.k); else S.on.delete(box.dataset.k);
       if (box.dataset.k === 'plan') { if (box.checked) planLayer.addTo(map); else planLayer.remove(); }  // badges follow in refreshTags
       if (box.dataset.k === 'dots' || box.dataset.k === 'rings') drawMarks();
+      if (box.dataset.k === 'routes') drawRoutes();
       refreshTags();
     }
     renderLegend();
@@ -271,6 +363,7 @@
     if (S.on.has('dots') && S.ps) keys.push('<span><span class="g-dot"></span>Circle: supporters now</span>');
     if (S.on.has('rings') && S.t) keys.push('<span><span class="g-ring"></span>Ring: 2024 supporters</span>');
     if (S.on.has('plan') && S.plan) keys.push('<span><span class="g-plan">1</span>GOTV priority (gold outline), dashed line to the voting place it’s sent to</span>');
+    if (S.on.has('routes') && R.routes.length) keys.push(`<span><span class="g-route"></span>Route ${R.sel + 1} of ${R.routes.length}, numbered in knocking order</span>`);
     if (S.on.has('places')) keys.push('<span><span class="g-place"></span>2024 voting place</span>');
     if (keys.length) parts.push(`<div class="keys">${keys.join('')}</div>`);
     $('legend').innerHTML = parts.join('');
@@ -290,8 +383,9 @@
     if (!r) return '';
     const st = statusOf(r);
     let h = `<div class="pop"><h3>Poll ${esc(r.label)}${st ? ` <span class="status st-${st.k}">${st.label}</span>` : ''}</h3>`;
-    const said = story(r);
+    const said = story(r), f = S.focus.get(key);
     if (said) h += `<p class="story">${said}</p>`;
+    if (f) h += `<p class="meta">Focus rank <b>#${f.rank}</b> of ${S.focus.size} · score ${fmt(f.score)}${f.doors ? ` · ${fmt(f.doors)} doors with a 2024 non-voter, about ${f.hours.toFixed(1)} h to knock` : ''}</p>`;
     const cells = [];
     if (r.now != null) cells.push(`<div><b><i class="k now"></i>${fmt(r.now)}</b><span>supporters now${r.supHh != null ? `, in ${fmt(r.supHh)} household${r.supHh === 1 ? '' : 's'}` : ''}</span></div>`);
     if (r.y24 != null) cells.push(`<div><b><i class="k y24"></i>${fmt(r.y24)}</b><span>on the 2024 lists: ${fmt(r.voted)} voted, ${fmt(r.not)} didn’t</span></div>`);
@@ -305,6 +399,7 @@
     if (r.place) h += `<h4>2024 result · ${chip(lean(r.place.day))}</h4><p class="meta">Election day at ${esc(r.place.name)} (polls ${runs(r.place.polls)})</p>${partyBars(r.place.day)}`;
     else if (!r.p) h += '<p class="meta">A single-building poll (usually a care home), so it has no area on the map.</p>';
     if (r.streets.length) h += `<details><summary>Streets in this poll</summary><div class="streets">${r.streets.map(s => `<span>${esc(s.name)} <span class="num">${s.n}</span></span>`).join('')}</div></details>`;
+    if (r.p && S.doors.some(d => d.poll === key)) h += `<button type="button" class="btn" data-route-poll="${esc(key)}">Plan door-knocking routes</button>`;
     return h + '</div>';
   }
   function openPoll(key, at) {
@@ -351,32 +446,61 @@
     $('loaded').textContent = loaded.length ? `Loaded: ${loaded.join(' · ')}` : '';
     $('lockBtn').hidden = !(S.builtIn && ENC);
   }
+  // the focus table: polls ranked by focus score, or the party's plan first
+  const planRank = r => r.plan ? r.plan.rank : 9;
   const COLS = [
-    { k: 'code', label: 'Poll', get: r => r.sortCode, show: r => esc(r.label) },
-    { k: 'now', label: 'Now', get: r => r.now ?? -1, show: r => r.now == null ? '—' : fmt(r.now), r: true, when: () => !!S.ps },
-    { k: 'y24', label: '2024', get: r => r.y24 ?? -1, show: r => r.y24 == null ? '—' : fmt(r.y24), r: true, when: () => !!S.t },
-    { k: 'ratio', label: 'Now ÷ ’24', get: r => both(r) && r.y24 >= 10 ? r.now / r.y24 : -1, show: r => both(r) && r.y24 >= 10 ? pct(r.now / r.y24) : '—', r: true, when: () => !!(S.ps && S.t) },
-    { k: 'unknown', label: 'No answer', get: r => r.unknown ?? -1, show: r => r.unknown == null ? '—' : pct(r.unknown), r: true, when: () => !!S.ps },
-    { k: 'plan', label: 'Plan', get: r => r.plan ? -r.plan.rank : -99, show: r => r.plan ? `<span class="g-plan" title="GOTV priority ${r.plan.rank}">${r.plan.rank}</span>` : '', r: true, when: () => !!S.plan },
+    { k: 'rank', label: '#', get: r => r.f.rank, show: r => r.f.rank, r: true },
+    { k: 'code', label: 'Poll', get: r => r.sortCode, show: r => `${esc(r.label)}${r.plan ? ` <span class="g-plan" title="GOTV priority ${r.plan.rank}">${r.plan.rank}</span>` : ''}` },
+    { k: 'score', label: 'Focus', get: r => r.f.score, show: r => fmt(r.f.score), r: true, title: 'Focus score' },
+    { k: 'skipped', label: 'No vote ’24', get: r => r.f.skipped, show: r => `${fmt(r.f.skipped)}${r.f.unchecked ? '*' : ''}`, r: true, when: () => !!S.t,
+      title: '2024 supporters still on the voters list who didn’t vote in 2024' },
+    { k: 'now', label: 'Now', get: r => r.now ?? -1, show: r => r.now == null ? '—' : fmt(r.now), r: true, when: () => !!S.ps, title: 'Supporters now (Poll Summary)' },
+    { k: 'y24', label: '2024', get: r => r.y24 ?? -1, show: r => r.y24 == null ? '—' : fmt(r.y24), r: true, when: () => !!S.t, title: 'Everyone on the 2024 supporter lists' },
+    { k: 'doors', label: 'Doors', get: r => r.f.doors, show: r => fmt(r.f.doors), r: true, when: () => !!S.t, title: 'Doors with a 2024 supporter who didn’t vote' },
+    { k: 'hours', label: 'Hours', get: r => r.f.hours, show: r => r.f.doors ? r.f.hours.toFixed(1) : '—', r: true, when: () => !!S.t, title: 'Estimated knocking time for those doors' },
   ];
   function renderTable() {
     const cols = COLS.filter(c => !c.when || c.when());
-    const sort = S.sort && cols.some(c => c.k === S.sort.k) ? S.sort : { k: 'code', dir: 1 };
+    const byPlan = S.order === 'plan' && S.plan;
+    const sort = S.sort && cols.some(c => c.k === S.sort.k) ? S.sort : { k: 'rank', dir: 1 };
     const col = cols.find(c => c.k === sort.k);
-    const rows = [...S.rows.values()].sort((a, b) => (col.get(a) - col.get(b)) * sort.dir || a.sortCode - b.sortCode);
-    $('pollHead').innerHTML = cols.map(c => `<th class="${c.r ? 'r' : ''}" ${c.k === sort.k ? `aria-sort="${sort.dir > 0 ? 'ascending' : 'descending'}"` : ''}><button type="button" data-k="${c.k}">${c.label}</button></th>`).join('');
-    $('pollBody').innerHTML = rows.map(r => `<tr class="go${r.key === S.sel ? ' sel' : ''}" tabindex="0" data-key="${esc(r.key)}">${cols.map(c => `<td class="${c.r ? 'r' : ''}">${c.show(r)}</td>`).join('')}</tr>`).join('');
-    const sum = k => rows.reduce((t, r) => t + (r[k] || 0), 0);
-    const foot = { code: 'All', now: S.ps ? fmt(sum('now')) : '', y24: S.t ? fmt(sum('y24')) : '', ratio: S.ps && S.t && sum('y24') ? pct(sum('now') / sum('y24')) : '', unknown: '', plan: '' };
+    const rows = [...S.rows.values()].filter(r => S.focus.has(r.key)).map(r => ({ ...r, f: S.focus.get(r.key) }))
+      .sort((a, b) => (byPlan && !S.sort ? planRank(a) - planRank(b) : 0) || (col.get(a) - col.get(b)) * sort.dir || a.f.rank - b.f.rank);
+    $('order').hidden = !S.plan || !rows.length;
+    $('order').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', (b.dataset.order === 'plan') === !!byPlan));
+    $('pollHead').innerHTML = cols.map(c => `<th class="${c.r ? 'r' : ''}" ${c.title ? `title="${c.title}"` : ''} ${c.k === sort.k && (S.sort || !byPlan) ? `aria-sort="${sort.dir > 0 ? 'ascending' : 'descending'}"` : ''}><button type="button" data-k="${c.k}">${c.label}</button></th>`).join('');
+    let lastPlan = null;
+    $('pollBody').innerHTML = rows.map(r => {
+      const band = byPlan && !S.sort && planRank(r) !== lastPlan ? (lastPlan = planRank(r), `<tr class="band"><td colspan="${cols.length}">${r.plan ? `Priority ${r.plan.rank}: ${esc(r.plan.place)}` : 'Not in the plan'}</td></tr>`) : '';
+      return `${band}<tr class="go${r.key === S.sel ? ' sel' : ''}" tabindex="0" data-key="${esc(r.key)}">${cols.map(c => `<td class="${c.r ? 'r' : ''}">${c.show(r)}</td>`).join('')}</tr>`;
+    }).join('');
+    const sum = k => rows.reduce((t, r) => t + (k in r.f ? r.f[k] : r[k] || 0), 0);
+    const foot = { rank: '', code: 'All', score: fmt(sum('score')), skipped: fmt(sum('skipped')), now: S.ps ? fmt(sum('now')) : '', y24: S.t ? fmt(sum('y24')) : '',
+      doors: fmt(sum('doors')), hours: sum('hours').toFixed(0) };
     $('pollFoot').innerHTML = rows.length ? `<tr>${cols.map(c => `<td class="${c.r ? 'r' : ''}">${foot[c.k]}</td>`).join('')}</tr>` : '';
-    const notes = [];
-    if (S.ps) notes.push('<b>Now</b> is current support in the Poll Summary; <b>No answer</b> is the share of people on file with no support answer yet.');
-    if (S.t) notes.push('<b>2024</b> counts people on the 2024 supporter lists (voted and didn’t vote).');
-    const missing = [S.ps?.rows.get('999')?.support && `${fmt(S.ps.rows.get('999').support)} supporters now`, S.t?.noPoll && `${fmt(S.t.noPoll)} people on the 2024 lists`].filter(Boolean);
-    if (missing.length) notes.push(`${missing.join(' and ')} have no poll or a usable address, so they’re only in the totals at the top.`);
-    notes.push('Click a column to sort, or a poll to open it.');
-    $('pollsNote').innerHTML = notes.join(' ');
+    renderFocusNote(rows);
   }
+  function renderFocusNote(rows) {
+    const h = [];
+    if (!rows.length) { $('pollsNote').innerHTML = '<p class="note">Unlock the campaign data to rank the polls.</p>'; return; }
+    h.push(`<p class="note"><b>Focus score</b> = 2024 supporters still on the voters list who didn’t vote last time (1 each: the votes a knock can add)
+      + supporters found this election (½ each: they need a reminder too, and some are the same people). <b>Doors</b> and <b>Hours</b>: knocking every door
+      with a 2024 non-voter, walking at 4.5 km/h, about ${WALK.DOOR_MIN} minutes a door and a minute more for each extra unit in a building.</p>`);
+    if (S.plan) {
+      const planned = rows.filter(r => r.plan), n = planned.length, top = [...rows].sort((a, b) => a.f.rank - b.f.rank).slice(0, n);
+      const inTop = top.filter(r => r.plan).length, extra = top.filter(r => !r.plan), lower = planned.filter(r => !top.includes(r)).sort((a, b) => a.f.rank - b.f.rank);
+      const list = rs => rs.map(r => `<button type="button" class="linkish" data-poll="${esc(r.key)}">${esc(r.label)}</button> (#${r.f.rank})`).join(', ');
+      h.push(`<div class="verdict"><p><b>The party’s plan and the data mostly agree.</b> The data’s top ${n} polls include ${inTop} of the plan’s ${n}.</p>
+        ${extra.length ? `<p>Ranked high but not in the plan: ${list(extra)}.</p>` : ''}${lower.length ? `<p>In the plan but lower on the data: ${list(lower)}.</p>` : ''}</div>`);
+    }
+    const unchecked = rows.filter(r => r.f.unchecked);
+    if (unchecked.length) h.push(`<p class="note">* Nobody in poll${unchecked.length > 1 ? 's' : ''} ${unchecked.map(r => esc(r.label)).join(', ')} is in the voters-list file, so ${unchecked.length > 1 ? 'their' : 'its'} 2024 non-voters are counted without that check.</p>`);
+    const missing = [S.ps?.rows.get('999')?.support && `${fmt(S.ps.rows.get('999').support)} supporters now`, S.t?.noPoll && `${fmt(S.t.noPoll)} people on the 2024 lists`].filter(Boolean);
+    if (missing.length) h.push(`<p class="note">${missing.join(' and ')} have no poll or a usable address, so they aren’t in this table. Click a column to sort, or a poll to open it.</p>`);
+    $('pollsNote').innerHTML = h.join('');
+  }
+  $('order').addEventListener('click', e => { const b = e.target.closest('button[data-order]'); if (!b) return; S.order = b.dataset.order; S.sort = null; renderTable(); });
+  $('pollsNote').addEventListener('click', e => { const b = e.target.closest('[data-poll]'); if (b) goPoll(b.dataset.poll); });
   $('pollHead').addEventListener('click', e => {
     const b = e.target.closest('button[data-k]');
     if (!b) return;
@@ -395,16 +519,190 @@
   $('pollBody').addEventListener('click', e => { const tr = e.target.closest('tr.go'); if (tr) goPoll(tr.dataset.key); });
   $('pollBody').addEventListener('keydown', e => { const tr = e.target.closest('tr.go'); if (tr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); goPoll(tr.dataset.key); } });
 
+  // ------------------------------------------------------------------ door-knocking routes
+  const knockOpts = () => ({ not: $('kNot').checked, voted: $('kVoted').checked, now: $('kNow').checked, reg: $('kReg').checked });
+  function turfs() {
+    const out = [];
+    for (const g of S.plan?.groups || []) {
+      const codes = g.polls.map(k => +pollKey(k)).filter(Number.isFinite).sort((a, b) => a - b);
+      out.push({ id: 'g' + g.rank, label: `Priority ${g.rank}: polls ${runs(codes)} (${g.place})`, polls: new Set(codes.map(String)) });
+    }
+    [...S.focus.values()].filter(f => f.doors || S.doors.some(d => d.poll === f.key)).forEach(f =>
+      out.push({ id: 'p' + f.key, label: `Poll ${f.key} · focus #${f.rank}`, polls: new Set([f.key]) }));
+    return out;
+  }
+  function renderRouteForm() {
+    const ts = turfs(), sel = $('turf'), keep = sel.value;
+    $('routesEmpty').hidden = ts.length > 0;
+    $('routeForm').hidden = !ts.length;
+    if (!ts.length) return;
+    const groups = ts.filter(t => t.id[0] === 'g'), single = ts.filter(t => t.id[0] === 'p');
+    sel.innerHTML = (groups.length ? `<optgroup label="GOTV plan">${groups.map(t => `<option value="${t.id}">${esc(t.label)}</option>`).join('')}</optgroup>` : '') +
+      `<optgroup label="One poll, by focus rank">${single.map(t => `<option value="${t.id}">${esc(t.label)}</option>`).join('')}</optgroup>`;
+    sel.value = ts.some(t => t.id === keep) ? keep : ts[0].id;
+    $('kReg').closest('label').hidden = !S.hasReg;
+    $('kNow').closest('label').hidden = !S.ix;
+    $('kNot').closest('label').hidden = $('kVoted').closest('label').hidden = !S.lists;
+  }
+  function clearRoutes() {
+    R.routes = []; R.turf = null; R.sel = 0;
+    routeLayer.clearLayers();
+    $('routeOut').innerHTML = '';
+  }
+  function planRoutes() {
+    const t = turfs().find(x => x.id === $('turf').value);
+    if (!t) return;
+    const o = knockOpts(), size = Math.max(10, Math.min(200, +$('perRoute').value || 40));
+    const doors = S.doors.filter(d => t.polls.has(d.poll) && targetsAt(d, o) > 0);
+    const t0 = performance.now();
+    R.routes = WALK.plan(doors, size);
+    R.turf = t; R.opts = o; R.sel = 0; R.ms = performance.now() - t0;
+    R.routes.forEach((rt, i) => rt.doors.forEach((d, k) => { d.route = i; d.stop = k + 1; }));
+    S.on.add('routes');
+    renderRoutes();
+    drawRoutes();
+    renderSwitches();
+    renderLegend();
+    if (R.routes.length) map.fitBounds(L.latLngBounds(doors.map(d => d.p)), { padding: [40, 40], animate: !reduced, maxZoom: 17 });
+  }
+  const hm = min => min < 60 ? `${Math.round(min)} min` : `${Math.floor(min / 60)} h ${String(Math.round(min % 60)).padStart(2, '0')}`;
+  const km = m => (m / 1000).toFixed(1) + ' km';
+  function whoAt(d, o = R.opts || KNOCK_GOTV) {
+    const free = !o.reg || S.unchecked.has(d.poll), out = [];
+    const not = free ? d.not : d.notReg, voted = free ? d.voted : d.votedReg;
+    if (o.not && not) out.push(`${not} didn’t vote ’24${d.phoneNot ? ` (${Math.min(d.phoneNot, not)} with phone)` : ''}`);
+    if (o.voted && voted) out.push(`${voted} voted ’24`);
+    if (o.now && d.now) out.push(`${d.now} supporter${d.now > 1 ? 's' : ''} now`);
+    return out.join(' · ');
+  }
+  function renderRoutes() {
+    if (!R.routes.length) {
+      $('routeOut').innerHTML = R.turf ? '<p class="note">No doors match these choices in this area.</p>' : '';
+      return;
+    }
+    const doors = R.routes.reduce((t, r) => t + r.doors.length, 0), len = R.routes.reduce((t, r) => t + r.len, 0), min = R.routes.reduce((t, r) => t + r.minutes, 0);
+    const people = R.routes.reduce((t, r) => t + r.doors.reduce((u, d) => u + targetsAt(d, R.opts), 0), 0);
+    $('routeOut').innerHTML = `<p class="route-sum"><b>${fmt(doors)} doors</b> · ${fmt(people)} people · ${R.routes.length} route${R.routes.length > 1 ? 's' : ''} · ${km(len)} · about ${hm(min)} of knocking</p>
+      <div class="actions"><button type="button" class="btn" data-print="all">Print walk lists</button><button type="button" class="btn" data-csv="all">Download CSV</button>
+        <button type="button" class="btn quiet" id="clearRoutes">Clear</button></div>
+      <ol class="route-list">${R.routes.map((rt, i) => `<li><button type="button" data-route="${i}" aria-pressed="${i === R.sel}"><span class="rn">${i + 1}</span>
+        <span><b>${rt.doors.length} doors</b> · ${km(rt.len)} · ~${hm(rt.minutes)}<small>Starts at ${esc(rt.doors[0].civic)}, ends at ${esc(rt.doors.at(-1).civic)}</small></span></button>
+        <span class="route-acts"><button type="button" class="btn quiet" data-print="${i}">Print</button><button type="button" class="btn quiet" data-csv="${i}">CSV</button></span></li>`).join('')}</ol>
+      <p class="note">Routes follow the streets: each street in house-number order, long streets up one side and back down the other, then on to the nearest next street.
+        Times assume walking at 4.5 km/h and about ${WALK.DOOR_MIN} minutes a door. The walk lists show addresses and who to ask for by type, not names.</p>`;
+  }
+  function drawRoutes() {
+    routeLayer.clearLayers();
+    if (!R.routes.length || !S.on.has('routes')) return;
+    const fg = tok('fg'), muted = tok('muted'), halo = tok('halo');
+    R.routes.forEach((rt, i) => {
+      if (i === R.sel) return;
+      routeLayer.addLayer(L.polyline(rt.line, { renderer: routeCanvas, interactive: false, color: muted, weight: 2.5, opacity: 0.6, dashArray: '2 5' }));
+      rt.doors.forEach(d => routeLayer.addLayer(L.circleMarker(d.p, { renderer: doorCanvas, radius: 4, color: halo, weight: 1, fillColor: muted, fillOpacity: 0.9 })
+        .on('click', () => { R.sel = i; renderRoutes(); drawRoutes(); renderLegend(); openDoor(d); })));
+      routeLayer.addLayer(L.marker(rt.doors[0].p, { pane: 'tags', interactive: false, keyboard: false,
+        icon: L.divIcon({ className: 'route-tag', iconSize: [0, 0], html: `<span>Route ${i + 1}</span>` }) }));
+    });
+    const rt = R.routes[R.sel];
+    routeLayer.addLayer(L.polyline(rt.line, { renderer: routeCanvas, interactive: false, color: halo, weight: 7, opacity: 0.9 }));
+    routeLayer.addLayer(L.polyline(rt.line, { renderer: routeCanvas, interactive: false, color: fg, weight: 3.5 }));
+    rt.doors.forEach((d, k) => routeLayer.addLayer(L.marker(d.p, { pane: 'doors', keyboard: false, title: `${k + 1}. ${d.civic}`,
+      icon: L.divIcon({ className: 'stop' + (k === 0 ? ' first' : ''), iconSize: [0, 0], html: `<span>${k + 1}</span>` }) }).on('click', () => openDoor(d))));
+  }
+  function openDoor(d) {
+    const units = [...d.units].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+    L.popup({ maxWidth: 300, autoPanPaddingTopLeft: [24, 72] }).setLatLng(d.p).setContent(`<div class="pop"><h3>${esc(d.civic)}</h3>
+      <p class="meta">Route ${d.route + 1} · stop ${d.stop} · poll ${esc(d.poll)}${d.approx ? ' · location estimated' : ''}</p>
+      <p>${whoAt(d)}</p>${units.length ? `<p class="meta units">Units: ${units.slice(0, 40).map(u => `<span>${esc(u)}</span>`).join('')}${units.length > 40 ? ` +${units.length - 40} more` : ''}</p>` : ''}</div>`).openOn(map);
+  }
+  const pickRoutes = which => which === 'all' ? R.routes.map((rt, i) => [rt, i]) : [[R.routes[+which], +which]];
+  function printRoutes(which) {
+    const today = new Date().toLocaleDateString('en-CA', { month: 'short', day: 'numeric', year: 'numeric' });
+    $('print').innerHTML = pickRoutes(which).map(([rt, i]) => `<section class="walk">
+      <header><h1>Route ${i + 1} <span>of ${R.routes.length}</span></h1><p>${esc(R.turf.label)} · ${rt.doors.length} doors · ${km(rt.len)} · about ${hm(rt.minutes)} · printed ${today}</p></header>
+      <table><thead><tr><th class="n">#</th><th class="a">Address</th><th class="u">Units</th><th class="w">Who’s there</th><th class="box">Home</th><th class="box">Not home</th><th class="box">Ride</th><th class="box">Voted</th><th class="notes">Notes</th></tr></thead>
+      <tbody>${rt.doors.map((d, k) => `<tr><td>${k + 1}</td><td><b>${esc(d.civic)}</b></td><td>${esc([...d.units].sort((a, b) => a.localeCompare(b, 'en', { numeric: true })).join(', '))}</td>
+        <td>${whoAt(d)}</td><td class="box"></td><td class="box"></td><td class="box"></td><td class="box"></td><td class="notes"></td></tr>`).join('')}</tbody></table>
+      <p class="foot">${esc(P.riding)} · confidential campaign list · return it to the office</p></section>`).join('');
+    window.print();
+  }
+  function csvRoutes(which) {
+    const q = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
+    const free = d => !R.opts.reg || S.unchecked.has(d.poll);
+    const rows = [['route', 'stop', 'address', 'units', 'poll', 'did not vote 2024', 'with a phone', 'voted 2024', 'supporters now', 'location', 'lat', 'lon']];
+    for (const [rt, i] of pickRoutes(which)) rt.doors.forEach((d, k) => rows.push([i + 1, k + 1, d.civic, [...d.units].join(' '), d.poll,
+      R.opts.not ? (free(d) ? d.not : d.notReg) : '', R.opts.not ? d.phoneNot : '', R.opts.voted ? (free(d) ? d.voted : d.votedReg) : '', R.opts.now ? d.now : '',
+      d.approx ? 'estimated' : 'address point', d.p[0].toFixed(5), d.p[1].toFixed(5)]));
+    const url = URL.createObjectURL(new Blob([rows.map(r => r.map(q).join(',')).join('\n')], { type: 'text/csv' }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: `${P.code.toLowerCase()}-${R.turf.id}-route${which === 'all' ? 's' : '-' + (+which + 1)}.csv` });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  $('routeForm').addEventListener('submit', e => { e.preventDefault(); planRoutes(); });
+  $('routeForm').addEventListener('change', e => { if (R.turf && e.target.id !== 'turf') planRoutes(); });
+  $('routeOut').addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.id === 'clearRoutes') { clearRoutes(); renderSwitches(); renderLegend(); return; }
+    if (b.dataset.print) return printRoutes(b.dataset.print);
+    if (b.dataset.csv) return csvRoutes(b.dataset.csv);
+    if (b.dataset.route) {
+      R.sel = +b.dataset.route;
+      renderRoutes();
+      drawRoutes();
+      renderLegend();
+      map.fitBounds(L.latLngBounds(R.routes[R.sel].doors.map(d => d.p)), { padding: [50, 50], animate: !reduced, maxZoom: 17.5 });
+      if (phone()) setSheet(false);
+    }
+  });
+
+  // ------------------------------------------------------------------ tabs
+  const TABS = ['map', 'focus', 'routes'];
+  function selectTab(name) {
+    TABS.forEach(t => {
+      const tab = $('tab-' + t), on = t === name;
+      tab.setAttribute('aria-selected', on);
+      tab.tabIndex = on ? 0 : -1;
+      $('pane-' + t).hidden = !on;
+    });
+    $('panelBody').scrollTop = 0;
+  }
+  document.querySelector('.tabs').addEventListener('click', e => { const t = e.target.closest('[role="tab"]'); if (t) selectTab(t.id.slice(4)); });
+  document.querySelector('.tabs').addEventListener('keydown', e => {
+    const i = TABS.indexOf(document.activeElement.id.slice(4));
+    if (i < 0 || !['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+    const next = TABS[(i + (e.key === 'ArrowRight' ? 1 : TABS.length - 1)) % TABS.length];
+    selectTab(next);
+    $('tab-' + next).focus();
+  });
+  // "Plan routes for this poll" in a poll card
+  map.getContainer().addEventListener('click', e => {
+    const b = e.target.closest('[data-route-poll]');
+    if (!b) return;
+    map.closePopup();
+    renderRouteForm();
+    $('turf').value = 'p' + b.dataset.routePoll;
+    selectTab('routes');
+    if (phone()) setSheet(true);
+    planRoutes();
+  });
+
   // ------------------------------------------------------------------ data in: the encrypted built-in data, or files loaded in this tab
   function afterLoad() {
     buildRows();
+    buildDoors();
+    computeFocus();
+    clearRoutes();
     if (S.on.has('plan') && S.plan) planLayer.addTo(map); else planLayer.remove();
     drawPlan();
     renderAll();
   }
   function applyBuiltIn(d) {
-    const ps = d.ps && sniff(d.ps.rows);
+    const ps = d.ps && sniff(d.ps.rows), ix = d.ix && sniff(d.ix.rows);
     if (ps && ps[0] === 'ps') S.ps = parsePollSummary(d.ps.rows, ps[1], { name: d.ps.name });
+    if (ix && ix[0] === 'ix') S.ix = parseInteractions(d.ix.rows, ix[1], { name: d.ix.name });
     for (const l of d.lists || []) S.lists = { ...S.lists, [l.kind]: listFromRows(l) };
     S.plan = d.plan || null;
     S.builtIn = true;
@@ -418,8 +716,8 @@
         const [kind, head] = sniff(rows);
         if (kind === 'ps') S.ps = parsePollSummary(rows, head, f);
         else if (kind === 'list') { const l = parseList(rows, head, f, listKind(f.name)); S.lists = { ...S.lists, [l.kind]: l }; }
-        else if (kind === 'ix') errors.push(`${f.name} is an Interactions export; open it on the Campaign map. This map uses the Poll Summary and the 2024 lists.`);
-        else errors.push(`${f.name} isn’t a Poll Summary or a 2024 supporter list.`);
+        else if (kind === 'ix') S.ix = parseInteractions(rows, head, f);
+        else errors.push(`${f.name} isn’t a Poll Summary, Interactions export or 2024 supporter list.`);
       } catch (x) {
         errors.push(`${f.name} couldn’t be read: ${x.message}`);
       }
@@ -430,7 +728,7 @@
   }
   $('files').addEventListener('change', e => { loadFiles([...e.target.files]); e.target.value = ''; });
   $('lockBtn').addEventListener('click', () => {
-    Object.assign(S, { ps: null, lists: null, plan: null, t: null, rows: new Map(), sel: null, builtIn: false });
+    Object.assign(S, { ps: null, ix: null, lists: null, plan: null, t: null, rows: new Map(), doors: [], focus: new Map(), sel: null, builtIn: false });
     map.closePopup();
     afterLoad();
     lock();
@@ -442,6 +740,7 @@
     restylePolls();
     drawMarks();
     drawPlan();
+    drawRoutes();
   }
   onTheme(applyTheme);
   const setSheet = sheet(app);
@@ -449,6 +748,7 @@
     renderSwitches();
     renderSummary();
     renderTable();
+    renderRouteForm();
     renderLegend();
     restylePolls();
     drawMarks();

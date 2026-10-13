@@ -173,6 +173,46 @@ window.SCC = (() => {
       asOf: (/(\d{4}-\d{2}-\d{2})/.exec(file.name) || [])[1] || '' };
   }
 
+  // canvass answers by household, from the Interactions export (one row per answer)
+  const CATEGORY = { 'Conservative': 'con', 'Conservative-Leaning': 'lean', 'NDP': 'ndp', 'NDP-Leaning': 'ndp_lean', 'Green': 'grn',
+    'Independent': 'oth', 'Other': 'oth', 'Undecided': 'und', 'Will Not Say': 'und', 'Unknown': 'und', 'Do Not Contact': 'dnc' };
+  function parseInteractions(rows, head, file) {
+    const voters = new Map();
+    let count = 0, latest = '', earliest = '';
+    for (const r of rows.slice(head + 1)) {
+      if (!r || r[0] == null || !cell(r[6])) continue;
+      count++;
+      const date = isoDate(r[0]), addr = cell(r[4]);
+      latest = date > latest ? date : latest;
+      if (date && (!earliest || date < earliest)) earliest = date;
+      if (!addr) continue;
+      const key = cell(r[1]) + '|' + addr;
+      let v = voters.get(key);
+      if (!v) voters.set(key, v = { addr, poll: pollKey(r[3]), support: null, sdate: '', lawnsign: false, last: '' });
+      if (date > v.last) v.last = date;
+      const field = cell(r[6]), sp = field.indexOf(' '), f = sp < 0 ? field : field.slice(0, sp), val = sp < 0 ? '' : field.slice(sp + 1);
+      if (f === 'Support' && date > v.sdate) { v.support = val; v.sdate = date; }  // newest first: ties keep the first row
+      else if (f === 'LawnSign' && val === 'Yes') v.lawnsign = true;
+    }
+    const sites = new Map();
+    for (const v of voters.values()) {
+      const a = v.addr.replace(/\s+/g, ' ').trim();
+      let unit = '', civic = a;
+      if (a.startsWith('- ') || a.includes(' - ')) { const i = a.indexOf('- '); unit = a.slice(0, i).replace(/[\s-]+$/, ''); civic = a.slice(i + 2).trim(); }
+      const cat = CATEGORY[v.support] || (v.lawnsign ? 'con' : null);  // a sign request with no answer yet counts as support
+      const k = siteKey(civic);
+      let s = sites.get(k);
+      if (!s) sites.set(k, s = { key: k, civic: prettyCivic(civic), polls: {}, n: {}, units: new Map(), ls: 0, last: '' });
+      s.polls[v.poll] = (s.polls[v.poll] || 0) + 1;
+      if (cat) s.n[cat] = (s.n[cat] || 0) + 1;
+      if (!s.units.has(unit)) s.units.set(unit, {});
+      if (cat) s.units.get(unit)[cat] = (s.units.get(unit)[cat] || 0) + 1;
+      s.ls += v.lawnsign ? 1 : 0;
+      if (v.last > s.last) s.last = v.last;
+    }
+    return { name: file.name, count, latest, earliest, voters: voters.size, seeds: [...sites.values()].filter(s => Object.keys(s.n).length) };
+  }
+
   // supporter turnout lists ("Yes, voted" / "Yes, not voted"): one row per supporter with poll and street address
   function listAddress(raw) {
     let a = cell(raw).replace(/\s+/g, ' ');
@@ -198,7 +238,8 @@ window.SCC = (() => {
   const listKind = name => /not/i.test(name) ? 'not' : 'voted';
   const NO_POLL = new Set(['', '999']);  // the lists use 999 for "no poll assigned"
   // the encrypted payload keeps list rows as [poll, street, has phone]
-  const listFromRows = l => ({ kind: l.kind, name: l.name, people: l.rows.map(([poll, street, ph]) => ({ poll: pollKey(poll), street, phone: !!ph })) });
+  // ...and, when the voters-by-last-name file was matched, whether the person is still on the voters list
+  const listFromRows = l => ({ kind: l.kind, name: l.name, people: l.rows.map(([poll, street, ph, reg]) => ({ poll: pollKey(poll), street, phone: !!ph, reg: reg == null ? null : !!reg })) });
   async function readWorkbook(file) {
     const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
     return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null, blankrows: false });
@@ -333,6 +374,6 @@ window.SCC = (() => {
   return { P, $, fmt, pct, esc, pad, day, reduced, phone, vaName, tok,
     PARTIES, valid, lean, leanText, leanVar, chip, RESULT_STEPS, RESULT_LABELS, classOf, sumWays, total, ridingConShare, places, placeOf, runs, polls, pollByKey, partyBars,
     normStreet, siteKey, prettyCivic, locate, inside, pollAt,
-    cell, isoDate, sniff, pollKey, parsePollSummary, listAddress, parseList, listKind, NO_POLL, listFromRows, readWorkbook,
+    CATEGORY, cell, isoDate, sniff, pollKey, parsePollSummary, parseInteractions, listAddress, parseList, listKind, NO_POLL, listFromRows, readWorkbook,
     ENC, gate, baseMap, placer, sheet };
 })();
