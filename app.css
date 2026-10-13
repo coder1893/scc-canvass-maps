@@ -375,6 +375,13 @@ fieldset.checks input { accent-color: var(--fg); }
 .route-form .btn.primary { justify-self: start; }
 #routeOut { display: grid; gap: 12px; }
 #routeOut:empty { display: none; }
+.book { display: grid; gap: 10px; padding-top: 18px; border-top: 1px solid var(--rule); }
+.book h2 { margin: 0; }
+.book .btn { justify-self: start; }
+#bookOut { display: grid; gap: 10px; }
+#bookOut:empty { display: none; }
+#bookOut .actions { margin-top: 0; }
+#bookOut textarea { width: 100%; box-sizing: border-box; margin-top: 6px; font: 11px/1.4 ui-monospace, monospace; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); color: var(--fg); }
 .route-sum b { font: 700 18px/1.2 var(--font-display); font-stretch: 100%; }
 #routeOut .actions { margin-top: 0; }
 .route-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }

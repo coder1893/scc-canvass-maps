@@ -199,8 +199,9 @@ window.WALK = (() => {
   }
   // 2-opt on the door order (the first and last doors stay put); walking distances when given, else straight lines
   function improve(seq, dist) {
-    const n = seq.length, d = dist || ((a, b) => metres(a.p, b.p)), budget = performance.now() + 1500;
-    for (let pass = 0, better = true; better && pass < 40 && performance.now() < budget; pass++) {
+    // a fixed number of passes, never a time limit: every computer must cut the same routes, so packet codes match the desk
+    const n = seq.length, d = dist || ((a, b) => metres(a.p, b.p));
+    for (let pass = 0, better = true; better && pass < 40; pass++) {
       better = false;
       for (let i = 0; i < n - 3; i++) {
         for (let k = i + 2; k < n - 1; k++) {

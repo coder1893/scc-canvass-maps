@@ -253,7 +253,8 @@ window.PACKET = (() => {
     doc.text(`${meta.riding} · confidential campaign list · return it to the office`, PAGE.m, PAGE.h - PAGE.m + 14);
   }
   function routePages(doc, it, meta, places) {
-    const { rt, n, of } = it, title = `Route ${n} of ${of}`, sub = `${meta.area} · ${rt.doors.length} doors · ${meta.km(rt.len)} · about ${meta.hm(rt.minutes)}`;
+    const { rt, n, of } = it, title = `Route ${it.code || n}`;
+    const sub = `${it.area || meta.area} · route ${n} of ${of} · ${rt.doors.length} doors · ${meta.km(rt.len)} · about ${meta.hm(rt.minutes)}`;
     // page 1: the map
     header(doc, title, sub, meta);
     pdfMap(doc, model(rt, places), FRAME.x, FRAME.y);

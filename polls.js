@@ -531,10 +531,13 @@
       out.push({ id: 'p' + f.key, label: `Poll ${f.key} · focus #${f.rank}`, polls: new Set([f.key]) }));
     return out;
   }
+  // a route's code, shared by the packets and the check-in desk: P1-03 is Priority 1, route 3; 35-2 is poll 35, route 2
+  const codeFor = (turfId, i) => turfId[0] === 'g' ? `P${turfId.slice(1)}-${String(i + 1).padStart(2, '0')}` : turfId === 'x' ? `X-${i + 1}` : `${turfId.slice(1)}-${i + 1}`;
   function renderRouteForm() {
     const ts = turfs(), sel = $('turf'), keep = sel.value;
     $('routesEmpty').hidden = ts.length > 0;
     $('routeForm').hidden = !ts.length;
+    document.querySelector('.book').hidden = !ts.length;
     if (!ts.length) return;
     const groups = ts.filter(t => t.id[0] === 'g'), single = ts.filter(t => t.id[0] === 'p');
     sel.innerHTML = (groups.length ? `<optgroup label="GOTV plan">${groups.map(t => `<option value="${t.id}">${esc(t.label)}</option>`).join('')}</optgroup>` : '') +
@@ -545,7 +548,8 @@
     $('kNot').closest('label').hidden = $('kVoted').closest('label').hidden = !S.lists;
   }
   function clearRoutes() {
-    R.routes = []; R.turf = null; R.sel = 0;
+    R.routes = []; R.turf = null; R.sel = 0; book = null;
+    $('bookOut').innerHTML = '';
     routeLayer.clearLayers();
     $('routeOut').innerHTML = '';
   }
@@ -588,7 +592,7 @@
         <button type="button" class="btn quiet" id="clearRoutes">Clear</button></div>
       <p class="note">Each packet is a map of the route with numbered stops, then its house sheet: every door in order with Home, Not home, Ride and Voted boxes.</p>
       <ol class="route-list">${R.routes.map((rt, i) => `<li><button type="button" data-route="${i}" aria-pressed="${i === R.sel}"><span class="rn">${i + 1}</span>
-        <span><b>${rt.doors.length} doors</b> · ${km(rt.len)} · ~${hm(rt.minutes)}<small>Starts at ${esc(rt.doors[0].civic)}, ends at ${esc(rt.doors.at(-1).civic)}</small></span></button>
+        <span><b>Route ${codeFor(R.turf.id, i)}</b> · ${rt.doors.length} doors · ${km(rt.len)} · ~${hm(rt.minutes)}<small>Starts at ${esc(rt.doors[0].civic)}, ends at ${esc(rt.doors.at(-1).civic)}</small></span></button>
         <span class="route-acts"><button type="button" class="btn quiet" data-pdf="${i}">PDF</button><button type="button" class="btn quiet" data-print="${i}">Print</button><button type="button" class="btn quiet" data-csv="${i}">CSV</button></span></li>`).join('')}</ol>
       <p class="note">Routes follow the streets: each street in house-number order, long streets up one side and back down the other, then on to the nearest next street.
         Times assume walking at 4.5 km/h and about ${WALK.DOOR_MIN} minutes a door. House sheets show addresses and who’s there by type, not names.</p>`;
@@ -635,7 +639,7 @@
     btn.textContent = 'Making the PDF…';
     setTimeout(() => {  // let the button repaint first
       try {
-        const items = pickRoutes(which).map(([rt, i]) => ({ rt, n: i + 1, of: R.routes.length }));
+        const items = pickRoutes(which).map(([rt, i]) => ({ rt, n: i + 1, of: R.routes.length, code: codeFor(R.turf.id, i) }));
         const meta = { area: R.turf.label, riding: P.riding, printed: today(), km, hm, who: d => whoAt(d), units: unitsOf };
         download(PACKET.pdf(items, meta, packetPlaces()), `${P.code.toLowerCase()}-${R.turf.id}-route${which === 'all' ? 's' : '-' + (+which + 1)}.pdf`);
       } finally {
@@ -647,12 +651,12 @@
   function printRoutes(which) {
     const places = packetPlaces();
     $('print').innerHTML = pickRoutes(which).map(([rt, i]) => `<section class="walk walk-map">
-      <header><h1>Route ${i + 1} <span>of ${R.routes.length}</span></h1><p>${esc(R.turf.label)} · ${rt.doors.length} doors · ${km(rt.len)} · about ${hm(rt.minutes)} · printed ${today()}</p>
+      <header><h1>Route ${codeFor(R.turf.id, i)} <span>${i + 1} of ${R.routes.length}</span></h1><p>${esc(R.turf.label)} · ${rt.doors.length} doors · ${km(rt.len)} · about ${hm(rt.minutes)} · printed ${today()}</p>
         <p class="sign">Canvasser ____________________ &nbsp; Date ____________</p></header>
       ${PACKET.svg(PACKET.model(rt, places))}
       <p class="foot">Start at the black circle (1) and follow the line. Numbers are the stops on the house sheet; “12–14” marks doors next to each other. Dashed grey lines are poll boundaries.</p></section>
       <section class="walk">
-      <header><h1>Route ${i + 1} <span>house sheet</span></h1><p>${esc(R.turf.label)} · ${rt.doors.length} doors · ${km(rt.len)} · about ${hm(rt.minutes)} · printed ${today()}</p></header>
+      <header><h1>Route ${codeFor(R.turf.id, i)} <span>house sheet</span></h1><p>${esc(R.turf.label)} · ${rt.doors.length} doors · ${km(rt.len)} · about ${hm(rt.minutes)} · printed ${today()}</p></header>
       <table><thead><tr><th class="n">#</th><th class="a">Address</th><th class="u">Units</th><th class="w">Who’s there</th><th class="box">Home</th><th class="box">Not home</th><th class="box">Ride</th><th class="box">Voted</th><th class="notes">Notes</th></tr></thead>
       <tbody>${rt.doors.map((d, k) => `<tr><td>${k + 1}</td><td><b>${esc(d.civic)}</b></td><td>${esc(unitsOf(d))}</td>
         <td>${whoAt(d)}</td><td class="box"></td><td class="box"></td><td class="box"></td><td class="box"></td><td class="notes"></td></tr>`).join('')}</tbody></table>
@@ -684,6 +688,64 @@
       renderLegend();
       map.fitBounds(L.latLngBounds(R.routes[R.sel].doors.map(d => d.p)), { padding: [50, 50], animate: !reduced, maxZoom: 17.5 });
       if (phone()) setSheet(false);
+    }
+  });
+
+  // ------------------------------------------------------------------ route book: every route in every area, for the check-in desk
+  // The plan's priority groups, then every other poll on its own by focus rank, with the knocking choices above. The desk hands
+  // routes out by code; the packets printed from here carry the same codes.
+  function bookTurfs() {
+    const ts = turfs(), inPlan = new Set(ts.filter(t => t.id[0] === 'g').flatMap(t => [...t.polls]));
+    return ts.filter(t => t.id[0] === 'g' || !inPlan.has(t.id.slice(1)));
+  }
+  let book = null;
+  const SMALL_POLL = 15;  // polls with fewer doors than this share "X" routes instead of a trip each
+  function buildBook() {
+    const o = knockOpts(), size = Math.max(10, Math.min(200, +$('perRoute').value || 40)), list = [];
+    const doorsIn = t => S.doors.filter(d => t.polls.has(d.poll) && targetsAt(d, o) > 0);
+    const areas = [], small = [];
+    for (const t of bookTurfs()) {
+      if (t.id[0] === 'p' && doorsIn(t).length < SMALL_POLL) small.push(t.id.slice(1)); else areas.push(t);
+    }
+    const smallCodes = small.map(Number).sort((a, b) => a - b);
+    if (small.length) areas.push({ id: 'x', label: `Other polls with few doors: ${runs(smallCodes)}`, polls: new Set(small) });
+    for (const t of areas) {
+      const routes = WALK.plan(doorsIn(t), t.id === 'x' ? Math.ceil(size / 2) : size);  // scattered doors: shorter routes
+      routes.forEach((rt, i) => list.push({ t, i, rt, of: routes.length, code: codeFor(t.id, i) }));
+    }
+    const what = [o.not && '2024 supporters who didn’t vote', o.voted && '2024 supporters who voted', o.now && 'supporters found this election'].filter(Boolean).join(', ')
+      + (o.reg && S.hasReg ? ' (still on the voters list)' : '');
+    const group = t => S.plan?.groups.find(g => 'g' + g.rank === t.id);
+    const streetsOf = rt => [...new Set(rt.doors.map(d => d.civic.replace(/^\d+\s+/, '')))];
+    const json = { kind: 'route-book', built: new Date().toISOString().slice(0, 10), pollSummary: S.ps?.asOf || '', knock: what, perRoute: size,
+      routes: list.map((b, n) => ({ id: b.code, order: n + 1, area: group(b.t) ? `Priority ${group(b.t).rank}` : b.t.id === 'x' ? 'Other polls' : `Poll ${b.t.id.slice(1)}`,
+        place: group(b.t)?.place || '', polls: [...new Set(b.rt.doors.map(d => d.poll))].sort((x, y) => x - y), doors: b.rt.doors.length,
+        people: b.rt.doors.reduce((t, d) => t + targetsAt(d, o), 0), km: +(b.rt.len / 1000).toFixed(1), minutes: Math.round(b.rt.minutes), streets: streetsOf(b.rt) })) };
+    book = { o, list, json };
+    $('bookOut').innerHTML = `<p><b>${list.length} routes</b> in ${areas.length} areas · ${fmt(list.reduce((t, b) => t + b.rt.doors.length, 0))} doors${small.length ? ` · polls with fewer than ${SMALL_POLL} doors share the X routes` : ''}</p>
+      <div class="actions"><button type="button" class="btn primary" id="bookPdf">Download every packet (PDF)</button><button type="button" class="btn" id="bookCopy">Copy for the check-in desk</button></div>
+      <p class="note" id="bookMsg">Print every packet once and file them by code. Paste the copied text into the check-in desk’s Board, under “Load a route book”.</p>
+      <details><summary>Route book text</summary><textarea id="bookText" readonly rows="6">${esc(JSON.stringify(json))}</textarea></details>`;
+  }
+  $('buildBook').addEventListener('click', buildBook);
+  $('bookOut').addEventListener('click', async e => {
+    const b = e.target.closest('button');
+    if (!b || !book) return;
+    if (b.id === 'bookCopy') {
+      try { await navigator.clipboard.writeText(JSON.stringify(book.json)); $('bookMsg').textContent = 'Copied. Paste it into the check-in desk’s Board, under “Load a route book”.'; }
+      catch (x) { const t = $('bookText'); t.closest('details').open = true; t.select(); $('bookMsg').textContent = 'Copying was blocked: the text is selected below, so copy it with Ctrl+C (⌘C on a Mac).'; }
+    }
+    if (b.id === 'bookPdf') {
+      const label = b.textContent;
+      b.disabled = true;
+      b.textContent = 'Making the PDF…';
+      setTimeout(() => {
+        try {
+          const items = book.list.map(x => ({ rt: x.rt, n: x.i + 1, of: x.of, code: x.code, area: x.t.label }));
+          const meta = { area: 'Route book', riding: P.riding, printed: today(), km, hm, who: d => whoAt(d, book.o), units: unitsOf };
+          download(PACKET.pdf(items, meta, packetPlaces()), `${P.code.toLowerCase()}-route-book.pdf`);
+        } finally { b.disabled = false; b.textContent = label; }
+      }, 30);
     }
   });
 
