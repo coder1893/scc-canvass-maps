@@ -136,6 +136,7 @@ window.SCC = (() => {
       if (cell(r[0]) === 'Poll' && r.some(v => cell(v) === 'Reg Voters')) return ['ps', i];
       if (cell(r[0]) === 'Date' && cell(r[1]) === 'Voter') return ['ix', i];
       if (r.some(v => cell(v) === 'Street') && r.some(v => cell(v) === 'Poll') && r.some(v => cell(v) === 'Voter_ID')) return ['list', i];
+      if (['Name', 'Address', 'Poll', 'Support'].every(h => r.some(v => cell(v) === h))) return ['t1', i];
     }
     return [null, -1];
   }
@@ -236,6 +237,18 @@ window.SCC = (() => {
     return { kind, name: file.name, people };
   }
   const listKind = name => /not/i.test(name) ? 'not' : 'voted';
+  // the T1 list: poll, address, whether they've voted, and (built-in data only) which earlier lists they're on, as bits
+  const T1_ON = { voted24: 1, not24: 2, voters: 4, canvass: 8 };
+  const t1FromRows = t => ({ name: t.name, checked: t.checked || [], people: t.rows.map(([poll, street, voted, on]) => ({ poll: pollKey(poll), street, voted: !!voted, on })) });
+  function parseT1(rows, head, file) {  // a T1 file loaded in the browser: no names leave the file, so no overlap check
+    const H = rows[head].map(cell), col = n => H.indexOf(n);
+    const people = [];
+    for (const r of rows.slice(head + 1)) {
+      if (!r || !cell(r[col('Name')])) continue;
+      people.push({ poll: pollKey(r[col('Poll')]), street: r[col('Address')], voted: /^(yes|y|true|1)$/i.test(cell(r[col('Voted')])), on: null });
+    }
+    return { name: file.name, checked: [], people };
+  }
   const NO_POLL = new Set(['', '999']);  // the lists use 999 for "no poll assigned"
   // the encrypted payload keeps list rows as [poll, street, has phone]
   // ...and, when the voters-by-last-name file was matched, whether the person is still on the voters list
@@ -375,5 +388,6 @@ window.SCC = (() => {
     PARTIES, valid, lean, leanText, leanVar, chip, RESULT_STEPS, RESULT_LABELS, classOf, sumWays, total, ridingConShare, places, placeOf, runs, polls, pollByKey, partyBars,
     normStreet, siteKey, prettyCivic, locate, inside, pollAt,
     CATEGORY, cell, isoDate, sniff, pollKey, parsePollSummary, parseInteractions, listAddress, parseList, listKind, NO_POLL, listFromRows, readWorkbook,
+    T1_ON, t1FromRows, parseT1,
     ENC, gate, baseMap, placer, sheet };
 })();

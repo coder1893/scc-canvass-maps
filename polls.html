@@ -54,7 +54,7 @@
             <input id="files" type="file" accept=".xlsx,.xls,.csv" multiple>
             <button type="button" class="btn quiet" id="lockBtn">Lock</button>
           </div>
-          <p class="note">A Poll Summary, Interactions export or 2024 list you load opens in this browser only and is never uploaded. Closing the tab clears it.</p>
+          <p class="note">A Poll Summary, Interactions export, 2024 list or T1 list you load opens in this browser only and is never uploaded. Closing the tab clears it.</p>
           <p class="error" id="loadError" role="alert" hidden></p>
         </div>
       </section>
@@ -84,6 +84,7 @@
             <label><input type="checkbox" id="kNot" checked> 2024 supporters who didn’t vote</label>
             <label><input type="checkbox" id="kVoted"> 2024 supporters who voted</label>
             <label><input type="checkbox" id="kNow"> Supporters found this election <small>(canvass export)</small></label>
+            <label><input type="checkbox" id="kT1"> T1 list, not voted yet</label>
             <label class="sub"><input type="checkbox" id="kReg" checked> Only people still on the voters list <small>(skips people who seem to have moved)</small></label>
           </fieldset>
           <div class="two">

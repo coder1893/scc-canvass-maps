@@ -6,16 +6,16 @@
 (() => {
   const { P, $, fmt, pct, esc, day, reduced, phone, tok, lean, chip, RESULT_STEPS, RESULT_LABELS, classOf, runs, polls, pollByKey,
     partyBars, normStreet, siteKey, prettyCivic, locate, pollAt, listAddress, sniff, pollKey, parsePollSummary, parseInteractions, parseList,
-    listKind, NO_POLL, listFromRows, readWorkbook, ENC, gate, baseMap, placer, sheet } = SCC;
+    listKind, NO_POLL, listFromRows, readWorkbook, t1FromRows, parseT1, ENC, gate, baseMap, placer, sheet } = SCC;
   const app = $('app');
 
-  const S = { ps: null, ix: null, lists: null, plan: null, t: null, rows: new Map(), doors: [], unchecked: new Set(), focus: new Map(),
-    fill: 'now', on: new Set(['numbers', 'counts', 'plan', 'streets', 'routes']), sel: null, sort: null, builtIn: false };
+  const S = { ps: null, ix: null, lists: null, plan: null, t1: null, t: null, rows: new Map(), doors: [], unchecked: new Set(), focus: new Map(),
+    fill: 'now', on: new Set(['numbers', 'counts', 'plan', 'streets', 'routes', 't1dots']), sel: null, sort: null, builtIn: false };
   const R = { routes: [], sel: 0, turf: null };  // the door-knocking routes on the map
 
   // ------------------------------------------------------------------ map
   const { map, streetLabels, placeMarkers, styleBase, onTheme } = baseMap('map', [['roads', 300, true], ['mask', 340, true], ['data', 400],
-    ['plan', 410, true], ['routes', 415, true], ['marks', 420, true], ['streetLabels', 430, true], ['places', 440, true], ['tags', 460, true], ['doors', 465]]);
+    ['plan', 410, true], ['routes', 415, true], ['marks', 420, true], ['t1', 425], ['streetLabels', 430, true], ['places', 440, true], ['tags', 460, true], ['doors', 465]]);
   const dataCanvas = L.canvas({ pane: 'data', padding: 0.4, tolerance: 3 });
   const planCanvas = L.canvas({ pane: 'plan', padding: 0.4 });
   const markCanvas = L.canvas({ pane: 'marks', padding: 0.4 });
@@ -65,14 +65,24 @@
     const planOf = new Map();
     for (const g of S.plan?.groups || []) for (const k of g.polls) planOf.set(pollKey(k), g);
     const keys = [...polls.map(p => p.key), ...(S.ps ? [...S.ps.rows.keys()].filter(k => !pollByKey.has(k) && k !== '999') : [])];
+    // the T1 list by the poll it gives each person: how many, how many already on our earlier lists, how many voted
+    const t1by = new Map();
+    for (const x of S.t1?.people || []) {
+      const c = t1by.get(x.poll) || { n: 0, voted: 0, known: 0, fresh: 0 };
+      c.n++;
+      if (x.voted) c.voted++;
+      if (x.on != null) { if (x.on) c.known++; else c.fresh++; }
+      t1by.set(x.poll, c);
+      if (!keys.includes(x.poll) && x.poll && x.poll !== '999') keys.push(x.poll);
+    }
     S.rows = new Map();
     for (const key of keys) {
       const ps = S.ps?.rows.get(key), y = S.t && (S.t.by.get(key) || S.t.by.get(key.replace(/S$/, ''))), p = pollByKey.get(key);
-      if (!p && !(ps?.reg)) continue;  // site-based polls (care homes) without voters
+      if (!p && !(ps?.reg) && !t1by.has(key)) continue;  // site-based polls (care homes) without voters
       S.rows.set(key, { key, label: p ? String(p.code) : key, sortCode: p ? p.code : parseInt(key, 10) + 0.5, p, place: p?.place,
         now: ps ? ps.support : null, supHh: ps?.supHh ?? null, unknown: ps ? ps.unknown : null, pop: ps?.pop ?? null, phones: ps?.phones ?? null,
         streets: ps?.streets || [], y24: S.t ? (y ? y.voted + y.not : 0) : null, voted: y?.voted || 0, not: y?.not || 0, notPhone: y?.notPhone || 0,
-        plan: planOf.get(key) || null });
+        plan: planOf.get(key) || null, t1: S.t1 ? (t1by.get(key) || { n: 0, voted: 0, known: 0, fresh: 0 }) : null });
     }
   }
   const rowOf = key => S.rows.get(key);
@@ -84,7 +94,7 @@
     const get = civic => {
       const key = siteKey(civic);
       let d = doors.get(key);
-      if (!d) doors.set(key, d = { key, civic: prettyCivic(civic), units: new Set(), not: 0, notReg: 0, voted: 0, votedReg: 0, now: 0, phoneNot: 0 });
+      if (!d) doors.set(key, d = { key, civic: prettyCivic(civic), units: new Set(), not: 0, notReg: 0, voted: 0, votedReg: 0, now: 0, phoneNot: 0, t1: 0, t1Left: 0, t1New: 0 });
       return d;
     };
     for (const list of [S.lists?.voted, S.lists?.not].filter(Boolean)) {
@@ -95,6 +105,15 @@
         if (a.unit) d.units.add(a.unit);
         if (list.kind === 'not') { d.not++; if (reg) d.notReg++; if (person.phone) d.phoneNot++; } else { d.voted++; if (reg) d.votedReg++; }
       }
+    }
+    for (const x of S.t1?.people || []) {  // the T1 list
+      const a = listAddress(x.street);
+      if (!a) continue;
+      const d = get(a.civic);
+      if (a.unit) d.units.add(a.unit);
+      d.t1++;
+      if (!x.voted) d.t1Left++;
+      if (x.on === 0) d.t1New++;
     }
     for (const seed of S.ix?.seeds || []) {
       const sup = (seed.n.con || 0) + (seed.n.lean || 0);
@@ -124,7 +143,7 @@
   const KNOCK_GOTV = { not: true, voted: false, now: false, reg: true };
   function targetsAt(d, o) {
     const free = !o.reg || S.unchecked.has(d.poll);
-    return (o.not ? (free ? d.not : d.notReg) : 0) + (o.voted ? (free ? d.voted : d.votedReg) : 0) + (o.now ? d.now : 0);
+    return (o.not ? (free ? d.not : d.notReg) : 0) + (o.voted ? (free ? d.voted : d.votedReg) : 0) + (o.now ? d.now : 0) + (o.t1 ? d.t1Left : 0);
   }
 
   // ------------------------------------------------------------------ focus ranking
@@ -199,6 +218,8 @@
     { k: 'focus', label: 'Focus score', sub: 'Where door knocking can add the most votes', color: 'sign', breaks: [25, 50, 100, 150, 200], alpha: ALPHA6,
       get: r => S.focus.get(r.key)?.score ?? null, edges: countEdges, needs: () => S.focus.size > 0,
       note: 'Registered 2024 supporters who didn’t vote, plus half the supporters found now. The Focus tab ranks the polls.' },
+    { k: 't1', label: 'T1 list', sub: 'People on the T1 list in each poll', color: 't1', breaks: [10, 25, 50, 75, 100], alpha: ALPHA6,
+      get: r => r.t1 ? r.t1.n : null, edges: countEdges, needs: () => !!S.t1, note: 'Counted by the poll the T1 list gives each person.' },
     { k: 'unknown', label: 'No answer yet', sub: 'People on file without a support answer', color: 'ramp-contact', breaks: [0.6, 0.7, 0.8, 0.9], alpha: ALPHA5,
       get: r => r.unknown, edges: pctEdges, needs: () => !!S.ps, note: 'Darker means more people still to reach.' },
     { k: 'result', label: '2024 result', sub: 'Election day at the poll’s 2024 voting place', needs: () => true,
@@ -237,6 +258,30 @@
       if (S.on.has('rings') && r.y24) marks.addLayer(L.circleMarker(p.at, { renderer: markCanvas, pane: 'marks', interactive: false,
         radius: radiusFor(r.y24) * k, fill: false, color: tok('y24'), weight: 2.5 }));
     }
+  }
+  // T1 households: solid when someone there is already on our earlier lists, a ring when everyone there is new to us,
+  // faded once everyone there has voted
+  const t1Layer = L.layerGroup().addTo(map), t1Canvas = L.canvas({ pane: 't1', padding: 0.4, tolerance: 4 });  // under the poll labels
+  function drawT1() {
+    t1Layer.clearLayers();
+    if (!S.t1 || !S.on.has('t1dots')) return;
+    const c = tok('t1'), halo = tok('halo'), surface = tok('surface');
+    for (const d of S.doors) {
+      if (!d.t1) continue;
+      const fresh = d.t1New === d.t1, done = d.t1Left === 0;
+      t1Layer.addLayer(L.circleMarker(d.p, { renderer: t1Canvas, pane: 't1', radius: 3.2 + Math.min(3, Math.sqrt(d.t1) - 1),
+        fillColor: fresh ? surface : c, fillOpacity: done ? 0.3 : 1, color: fresh ? c : halo, weight: fresh ? 2 : 1, opacity: done ? 0.5 : 1 })
+        .on('click', () => openT1(d)));
+    }
+  }
+  function openT1(d) {
+    const units = [...d.units].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+    const known = S.t1.people.some(x => x.on != null);
+    L.popup({ maxWidth: 300, autoPanPaddingTopLeft: [24, 72] }).setLatLng(d.p).setContent(`<div class="pop"><h3>${esc(d.civic)}</h3>
+      <p class="meta">Poll ${esc(d.poll)}${d.approx ? ' · location estimated' : ''}</p>
+      <p><b>${d.t1}</b> on the T1 list${known ? ` · ${d.t1 - d.t1New} already on our lists${d.t1New ? `, ${d.t1New} new` : ''}` : ''}${d.t1 - d.t1Left ? ` · ${d.t1 - d.t1Left} voted` : ''}</p>
+      ${d.not || d.voted ? `<p class="meta">Also ${[d.not && `${d.not} on the 2024 didn’t-vote list`, d.voted && `${d.voted} on the 2024 voted list`].filter(Boolean).join(', ')}.</p>` : ''}
+      ${units.length ? `<p class="meta units">Units: ${units.slice(0, 40).map(u => `<span>${esc(u)}</span>`).join('')}</p>` : ''}</div>`).openOn(map);
   }
   const planPlaces = () => (S.plan?.places || []).map(pl => ({ ...pl, hit: locate(pl.address) })).filter(pl => pl.hit);
   let planMarks = [];  // screen boxes the poll labels keep clear of: [latlng, dx, dy, w, h]
@@ -320,6 +365,7 @@
     { k: 'dots', label: 'Circles: supporters now', sub: 'Size shows the count', glyph: '<span class="g-dot"></span>', needs: () => !!S.ps },
     { k: 'rings', label: 'Rings: 2024 supporters', sub: 'Same size scale as the circles', glyph: '<span class="g-ring"></span>', needs: () => !!S.t },
     { k: 'plan', label: 'GOTV ride plan', sub: 'Priority polls and where they’re sent', glyph: '<span class="g-plan">1</span>', needs: () => !!S.plan },
+    { k: 't1dots', label: 'T1 households', sub: 'Solid: already on our lists · ring: new to us', glyph: '<span class="g-t1"></span>', needs: () => !!S.t1 },
     { k: 'routes', label: 'Door-knocking routes', sub: 'From the Routes tab', glyph: '<span class="g-route"></span>', needs: () => R.routes.length > 0 },
     { k: 'places', label: '2024 voting places', glyph: '<span class="g-place"></span>' },
     { k: 'streets', label: 'Street names', sub: 'When zoomed in', glyph: '<span class="g-street">Ave</span>' },
@@ -343,6 +389,7 @@
       if (box.dataset.k === 'plan') { if (box.checked) planLayer.addTo(map); else planLayer.remove(); }  // badges follow in refreshTags
       if (box.dataset.k === 'dots' || box.dataset.k === 'rings') drawMarks();
       if (box.dataset.k === 'routes') drawRoutes();
+      if (box.dataset.k === 't1dots') drawT1();
       refreshTags();
     }
     renderLegend();
@@ -364,6 +411,7 @@
     if (S.on.has('rings') && S.t) keys.push('<span><span class="g-ring"></span>Ring: 2024 supporters</span>');
     if (S.on.has('plan') && S.plan) keys.push('<span><span class="g-plan">1</span>GOTV priority (gold outline), dashed line to the voting place it’s sent to</span>');
     if (S.on.has('routes') && R.routes.length) keys.push(`<span><span class="g-route"></span>Route ${R.sel + 1} of ${R.routes.length}, numbered in knocking order</span>`);
+    if (S.on.has('t1dots') && S.t1) keys.push('<span><span class="g-t1"></span>T1 household (ring: new to us; faded: everyone voted)</span>');
     if (S.on.has('places')) keys.push('<span><span class="g-place"></span>2024 voting place</span>');
     if (keys.length) parts.push(`<div class="keys">${keys.join('')}</div>`);
     $('legend').innerHTML = parts.join('');
@@ -375,6 +423,7 @@
     if (r?.now != null) bits.push(`${fmt(r.now)} now`);
     if (r?.y24 != null) bits.push(`${fmt(r.y24)} in 2024`);
     if (r?.unknown != null) bits.push(`${pct(r.unknown)} no answer`);
+    if (r?.t1) bits.push(`${fmt(r.t1.n)} on T1`);
     if (r?.plan) bits.push(`priority ${r.plan.rank}`);
     return bits.join(' · ');
   }
@@ -391,6 +440,7 @@
     if (r.y24 != null) cells.push(`<div><b><i class="k y24"></i>${fmt(r.y24)}</b><span>on the 2024 lists: ${fmt(r.voted)} voted, ${fmt(r.not)} didn’t</span></div>`);
     if (r.unknown != null) cells.push(`<div><b>${pct(r.unknown)}</b><span>no support answer yet (of ${fmt(r.pop)} on file)</span></div>`);
     if (r.phones != null) cells.push(`<div><b>${fmt(r.phones)}</b><span>people with a phone number</span></div>`);
+    if (r.t1) cells.push(`<div><b><i class="k t1"></i>${fmt(r.t1.n)}</b><span>on the T1 list${r.t1.known + r.t1.fresh ? `: ${fmt(r.t1.known)} already on our lists, ${fmt(r.t1.fresh)} new` : ''}${r.t1.voted ? `; ${fmt(r.t1.voted)} voted` : ''}</span></div>`);
     if (cells.length) h += `<div class="grid">${cells.join('')}</div>`;
     if (r.plan) {
       const pl = (S.plan.places || []).find(x => x.name === r.plan.place);
@@ -419,10 +469,14 @@
   // ------------------------------------------------------------------ summary and table
   function renderSummary() {
     const ps = S.ps, t = S.t, h = [];
-    if (ps || t) {
+    if (ps || t || S.t1) {
       h.push('<div class="duo">');
       if (ps) h.push(`<div><b><i class="k now"></i>${fmt(ps.totals.support)}</b><span>supporters now</span><small>Poll Summary${ps.asOf ? `, ${day(ps.asOf)}` : ''}</small></div>`);
       if (t) h.push(`<div><b><i class="k y24"></i>${fmt(t.people)}</b><span>supporters on the 2024 lists</span><small>${fmt(t.voted)} voted in 2024, ${fmt(t.not)} didn’t</small></div>`);
+      if (S.t1) {
+        const ppl = S.t1.people, known = ppl.filter(x => x.on).length, fresh = ppl.filter(x => x.on === 0).length, voted = ppl.filter(x => x.voted).length;
+        h.push(`<div><b><i class="k t1"></i>${fmt(ppl.length)}</b><span>on the T1 list</span><small>${known + fresh ? `${fmt(known)} already on our lists, ${fmt(fresh)} new` : 'Loaded in this browser: no overlap check'}${voted ? ` · ${fmt(voted)} voted` : ''}</small></div>`);
+      }
       h.push('</div>');
     } else h.push('<p class="note">Unlock the campaign data, or load a Poll Summary, to see supporters by poll.</p>');
     const rows = [...S.rows.values()].filter(r => r.p && both(r));
@@ -441,7 +495,7 @@
       }).join('')}</ol>`);
     }
     $('summary').innerHTML = h.join('');
-    const loaded = [ps && `Poll Summary${ps.asOf ? ` (${day(ps.asOf)})` : ''}`, t && '2024 supporter lists', S.plan && 'GOTV plan'].filter(Boolean);
+    const loaded = [ps && `Poll Summary${ps.asOf ? ` (${day(ps.asOf)})` : ''}`, t && '2024 supporter lists', S.t1 && 'T1 list', S.plan && 'GOTV plan'].filter(Boolean);
     $('loaded').hidden = !loaded.length;
     $('loaded').textContent = loaded.length ? `Loaded: ${loaded.join(' · ')}` : '';
     $('lockBtn').hidden = !(S.builtIn && ENC);
@@ -455,6 +509,7 @@
     { k: 'skipped', label: 'No vote ’24', get: r => r.f.skipped, show: r => `${fmt(r.f.skipped)}${r.f.unchecked ? '*' : ''}`, r: true, when: () => !!S.t,
       title: '2024 supporters still on the voters list who didn’t vote in 2024' },
     { k: 'now', label: 'Now', get: r => r.now ?? -1, show: r => r.now == null ? '—' : fmt(r.now), r: true, when: () => !!S.ps, title: 'Supporters now (Poll Summary)' },
+    { k: 't1', label: 'T1', get: r => r.t1?.n ?? -1, show: r => r.t1 ? fmt(r.t1.n) : '—', r: true, when: () => !!S.t1, title: 'People on the T1 list' },
     { k: 'y24', label: '2024', get: r => r.y24 ?? -1, show: r => r.y24 == null ? '—' : fmt(r.y24), r: true, when: () => !!S.t, title: 'Everyone on the 2024 supporter lists' },
     { k: 'doors', label: 'Doors', get: r => r.f.doors, show: r => fmt(r.f.doors), r: true, when: () => !!S.t, title: 'Doors with a 2024 supporter who didn’t vote' },
     { k: 'hours', label: 'Hours', get: r => r.f.hours, show: r => r.f.doors ? r.f.hours.toFixed(1) : '—', r: true, when: () => !!S.t, title: 'Estimated knocking time for those doors' },
@@ -476,6 +531,7 @@
     }).join('');
     const sum = k => rows.reduce((t, r) => t + (k in r.f ? r.f[k] : r[k] || 0), 0);
     const foot = { rank: '', code: 'All', score: fmt(sum('score')), skipped: fmt(sum('skipped')), now: S.ps ? fmt(sum('now')) : '', y24: S.t ? fmt(sum('y24')) : '',
+      t1: fmt(rows.reduce((t, r) => t + (r.t1?.n || 0), 0)),
       doors: fmt(sum('doors')), hours: sum('hours').toFixed(0) };
     $('pollFoot').innerHTML = rows.length ? `<tr>${cols.map(c => `<td class="${c.r ? 'r' : ''}">${foot[c.k]}</td>`).join('')}</tr>` : '';
     renderFocusNote(rows);
@@ -520,7 +576,7 @@
   $('pollBody').addEventListener('keydown', e => { const tr = e.target.closest('tr.go'); if (tr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); goPoll(tr.dataset.key); } });
 
   // ------------------------------------------------------------------ door-knocking routes
-  const knockOpts = () => ({ not: $('kNot').checked, voted: $('kVoted').checked, now: $('kNow').checked, reg: $('kReg').checked });
+  const knockOpts = () => ({ not: $('kNot').checked, voted: $('kVoted').checked, now: $('kNow').checked, t1: $('kT1').checked, reg: $('kReg').checked });
   function turfs() {
     const out = [];
     for (const g of S.plan?.groups || []) {
@@ -545,6 +601,7 @@
     sel.value = ts.some(t => t.id === keep) ? keep : ts[0].id;
     $('kReg').closest('label').hidden = !S.hasReg;
     $('kNow').closest('label').hidden = !S.ix;
+    $('kT1').closest('label').hidden = !S.t1;
     $('kNot').closest('label').hidden = $('kVoted').closest('label').hidden = !S.lists;
   }
   function clearRoutes() {
@@ -578,6 +635,7 @@
     if (o.not && not) out.push(`${not} didn’t vote ’24${d.phoneNot ? ` (${Math.min(d.phoneNot, not)} with phone)` : ''}`);
     if (o.voted && voted) out.push(`${voted} voted ’24`);
     if (o.now && d.now) out.push(`${d.now} supporter${d.now > 1 ? 's' : ''} now`);
+    if (o.t1 && d.t1Left) out.push(`${d.t1Left} on T1, not voted`);
     return out.join(' · ');
   }
   function renderRoutes() {
@@ -667,9 +725,9 @@
   function csvRoutes(which) {
     const q = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
     const free = d => !R.opts.reg || S.unchecked.has(d.poll);
-    const rows = [['route', 'stop', 'address', 'units', 'poll', 'did not vote 2024', 'with a phone', 'voted 2024', 'supporters now', 'location', 'lat', 'lon']];
+    const rows = [['route', 'stop', 'address', 'units', 'poll', 'did not vote 2024', 'with a phone', 'voted 2024', 'supporters now', 'T1 not voted', 'location', 'lat', 'lon']];
     for (const [rt, i] of pickRoutes(which)) rt.doors.forEach((d, k) => rows.push([i + 1, k + 1, d.civic, [...d.units].join(' '), d.poll,
-      R.opts.not ? (free(d) ? d.not : d.notReg) : '', R.opts.not ? d.phoneNot : '', R.opts.voted ? (free(d) ? d.voted : d.votedReg) : '', R.opts.now ? d.now : '',
+      R.opts.not ? (free(d) ? d.not : d.notReg) : '', R.opts.not ? d.phoneNot : '', R.opts.voted ? (free(d) ? d.voted : d.votedReg) : '', R.opts.now ? d.now : '', R.opts.t1 ? d.t1Left : '',
       d.approx ? 'estimated' : 'address point', d.p[0].toFixed(5), d.p[1].toFixed(5)]));
     download(new Blob([rows.map(r => r.map(q).join(',')).join('\n')], { type: 'text/csv' }), `${P.code.toLowerCase()}-${R.turf.id}-route${which === 'all' ? 's' : '-' + (+which + 1)}.csv`);
   }
@@ -714,7 +772,7 @@
       const routes = WALK.plan(doorsIn(t), size, { maxLen });
       routes.forEach((rt, i) => list.push({ t, i, rt, of: routes.length, code: codeFor(t.id, i) }));
     }
-    const what = [o.not && '2024 supporters who didn’t vote', o.voted && '2024 supporters who voted', o.now && 'supporters found this election'].filter(Boolean).join(', ')
+    const what = [o.not && '2024 supporters who didn’t vote', o.voted && '2024 supporters who voted', o.now && 'supporters found this election', o.t1 && 'the T1 list (not voted yet)'].filter(Boolean).join(', ')
       + (o.reg && S.hasReg ? ' (still on the voters list)' : '');
     const group = t => S.plan?.groups.find(g => 'g' + g.rank === t.id);
     const streetsOf = rt => [...new Set(rt.doors.map(d => d.civic.replace(/^\d+\s+/, '')))];
@@ -797,6 +855,7 @@
     if (ix && ix[0] === 'ix') S.ix = parseInteractions(d.ix.rows, ix[1], { name: d.ix.name });
     for (const l of d.lists || []) S.lists = { ...S.lists, [l.kind]: listFromRows(l) };
     S.plan = d.plan || null;
+    S.t1 = d.t1 ? t1FromRows(d.t1) : null;
     S.builtIn = true;
     afterLoad();
   }
@@ -809,7 +868,8 @@
         if (kind === 'ps') S.ps = parsePollSummary(rows, head, f);
         else if (kind === 'list') { const l = parseList(rows, head, f, listKind(f.name)); S.lists = { ...S.lists, [l.kind]: l }; }
         else if (kind === 'ix') S.ix = parseInteractions(rows, head, f);
-        else errors.push(`${f.name} isn’t a Poll Summary, Interactions export or 2024 supporter list.`);
+        else if (kind === 't1') S.t1 = parseT1(rows, head, f);
+        else errors.push(`${f.name} isn’t a Poll Summary, Interactions export, 2024 supporter list or T1 list.`);
       } catch (x) {
         errors.push(`${f.name} couldn’t be read: ${x.message}`);
       }
@@ -820,7 +880,7 @@
   }
   $('files').addEventListener('change', e => { loadFiles([...e.target.files]); e.target.value = ''; });
   $('lockBtn').addEventListener('click', () => {
-    Object.assign(S, { ps: null, ix: null, lists: null, plan: null, t: null, rows: new Map(), doors: [], focus: new Map(), sel: null, builtIn: false });
+    Object.assign(S, { ps: null, ix: null, lists: null, plan: null, t1: null, t: null, rows: new Map(), doors: [], focus: new Map(), sel: null, builtIn: false });
     map.closePopup();
     afterLoad();
     lock();
@@ -833,6 +893,7 @@
     drawMarks();
     drawPlan();
     drawRoutes();
+    drawT1();
   }
   onTheme(applyTheme);
   const setSheet = sheet(app);
@@ -844,6 +905,7 @@
     renderLegend();
     restylePolls();
     drawMarks();
+    drawT1();
     refreshTags();
   }
   $('eyebrow').textContent = `${P.riding} · ${P.code}`;
