@@ -287,6 +287,7 @@ fieldset.switches legend .aside { font-weight: 500; color: var(--muted); margin-
 .g-t2 { display: inline-block; width: 11px; height: 11px; border-radius: 50%; background: var(--t2); border: 1px solid var(--halo); box-sizing: border-box; }
 .pop ul.calls { margin: 6px 0; padding-left: 18px; }
 .pop ul.calls li { margin: 2px 0; }
+.g-knock { display: inline-block; width: 15px; height: 15px; border-radius: 50%; border: 1.8px solid var(--fg); box-sizing: border-box; background: radial-gradient(circle, var(--muted) 0 3.5px, transparent 4px); }
 .g-t1 { display: inline-block; width: 11px; height: 11px; border-radius: 50%; background: var(--t1); border: 1px solid var(--halo); box-sizing: border-box; }
 .g-num { font: 700 11px/1.45 var(--font-ui); padding: 0 5px; border-radius: 3px; border: 1px solid var(--va); background: var(--surface); }
 .g-counts { display: inline-flex; gap: 2px; }

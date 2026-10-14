@@ -134,6 +134,7 @@ window.SCC = (() => {
     for (let i = 0; i < Math.min(rows.length, 120); i++) {
       const r = rows[i] || [];
       if (r.some(v => cell(v) === 'Household address') && r.some(v => cell(v) === 'Calling list')) return ['calls', i];
+      if (r.some(v => cell(v) === 'Door-knocked address')) return ['knocked', i];
       if (cell(r[0]) === 'Poll' && r.some(v => cell(v) === 'Reg Voters')) return ['ps', i];
       if (cell(r[0]) === 'Date' && cell(r[1]) === 'Voter') return ['ix', i];
       if (r.some(v => cell(v) === 'Street') && r.some(v => cell(v) === 'Poll') && r.some(v => cell(v) === 'Voter_ID')) return ['list', i];
@@ -279,6 +280,14 @@ window.SCC = (() => {
     if (!rowsOut.length) throw new Error(`${file.name} has no households in it.`);
     const src = { name: file.name, rows: rowsOut, checked: ['not24', 'door'] };
     return { ...callsFromRows(src), src };
+  }
+  // houses a volunteer has knocked: one address per house (the knocked_houses.csv t2_file.py writes)
+  const knockedFromRows = k => ({ name: k.name, src: k, streets: k.rows });
+  function parseKnocked(rows, head, file) {
+    const c = rows[head].map(cell).indexOf('Door-knocked address');
+    const out = rows.slice(head + 1).map(r => cell(r?.[c])).filter(Boolean);
+    if (!out.length) throw new Error(`${file.name} has no addresses in it.`);
+    return knockedFromRows({ name: file.name, rows: out });
   }
   const NO_POLL = new Set(['', '999']);  // the lists use 999 for "no poll assigned"
   // the encrypted payload keeps list rows as [poll, street, has phone]
@@ -444,6 +453,6 @@ window.SCC = (() => {
     PARTIES, valid, lean, leanText, leanVar, chip, RESULT_STEPS, RESULT_LABELS, classOf, sumWays, total, ridingConShare, places, placeOf, runs, polls, pollByKey, partyBars,
     normStreet, siteKey, prettyCivic, locate, inside, pollAt,
     CATEGORY, cell, isoDate, sniff, pollKey, parsePollSummary, parseInteractions, listAddress, parseList, listKind, NO_POLL, listFromRows, readWorkbook,
-    T1_ON, t1FromRows, parseT1, CALL_FLAGS, callsFromRows, parseCalls,
+    T1_ON, t1FromRows, parseT1, CALL_FLAGS, callsFromRows, parseCalls, knockedFromRows, parseKnocked,
     ENC, gate, sealExtra, baseMap, placer, sheet };
 })();
