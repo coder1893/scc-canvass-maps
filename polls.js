@@ -342,7 +342,6 @@
     planMarks = [];
     if (!S.plan) return;
     const color = tok('sign'), placesAt = new Map(planPlaces().map(pl => [pl.name, pl]));
-    const ranksAt = new Map();
     for (const g of S.plan.groups) {
       const members = g.polls.map(k => pollByKey.get(pollKey(k))).filter(Boolean);
       if (!members.length) continue;
@@ -351,15 +350,13 @@
       const dest = placesAt.get(g.place);
       if (dest) {
         planLayer.addLayer(L.polyline([c, dest.hit.p], { renderer: planCanvas, pane: 'plan', interactive: false, color, weight: 2.5, dashArray: '6 6' }));
-        ranksAt.set(g.place, [...(ranksAt.get(g.place) || []), g.rank]);
       }
       planBadges.addLayer(L.marker(c, { pane: 'tags', interactive: false, keyboard: false,
-        icon: L.divIcon({ className: 'plan-badge', iconSize: [0, 0], html: `<span title="Priority ${g.rank}">${g.rank}</span>` }) }));
+        icon: L.divIcon({ className: 'plan-badge', iconSize: [0, 0], html: `<span title="GOTV priority">★</span>` }) }));
     }
     for (const pl of placesAt.values()) {
-      const ranks = ranksAt.get(pl.name) || [];
       planLayer.addLayer(L.marker(pl.hit.p, { pane: 'tags', interactive: false, keyboard: false,
-        icon: L.divIcon({ className: 'plan-place', iconSize: [0, 0], html: `<i></i><span>${esc(pl.name)}<small>Priority ${ranks.join(' & ')}</small></span>` }) }));
+        icon: L.divIcon({ className: 'plan-place', iconSize: [0, 0], html: `<i></i><span>${esc(pl.name)}<small>GOTV priority</small></span>` }) }));
       planMarks.push([pl.hit.p, -10, -12, 22 + pl.name.length * 6.8, 32, true]);
     }
   }
@@ -386,8 +383,8 @@
     for (const { p, r } of shown) {
       const below = (S.on.has('dots') || S.on.has('rings')) && r ? Math.max(S.on.has('dots') ? radiusFor(r.now) : 0, S.on.has('rings') ? radiusFor(r.y24) : 0) * k : 0;
       const parts = [];
-      const rank = plan && r?.plan ? r.plan.rank : 0;
-      if (num || rank) parts.push(`<b>${rank ? `<i class="pr" title="GOTV priority ${rank}">${rank}</i>` : ''}${num ? p.code : ''}</b>`);
+      const rank = plan && r?.plan ? 1 : 0;
+      if (num || rank) parts.push(`<b>${rank ? '<i class="pr" title="GOTV priority">★</i>' : ''}${num ? p.code : ''}</b>`);
       if (counts && r) {
         const c = [];
         if (r.now != null) c.push(`<i class="k now"></i>${fmt(r.now)}`);
@@ -415,7 +412,7 @@
     { k: 'counts', label: 'Supporter counts', sub: 'Now and 2024, as numbers', glyph: '<span class="g-counts"><i class="k now"></i><i class="k y24"></i></span>', needs: () => S.rows.size > 0 },
     { k: 'dots', label: 'Circles: supporters now', sub: 'Size shows the count', glyph: '<span class="g-dot"></span>', needs: () => !!S.ps },
     { k: 'rings', label: 'Rings: 2024 supporters', sub: 'Same size scale as the circles', glyph: '<span class="g-ring"></span>', needs: () => !!S.t },
-    { k: 'plan', label: 'GOTV ride plan', sub: 'Priority polls and where they’re sent', glyph: '<span class="g-plan">1</span>', needs: () => !!S.plan },
+    { k: 'plan', label: 'GOTV ride plan', sub: 'Priority polls and where they’re sent', glyph: '<span class="g-plan">★</span>', needs: () => !!S.plan },
     { k: 't1dots', label: 'T1 households', sub: 'Solid: already on our lists · ring: new to us', glyph: '<span class="g-t1"></span>', needs: () => !!S.t1 },
     { k: 't2dots', label: 'T2 households', sub: 'Solid: T2 · ring: said yes · grey: do not contact', glyph: '<span class="g-t2"></span>', needs: () => !!S.calls },
     { k: 'routes', label: 'Door-knocking routes', sub: 'From the Routes tab', glyph: '<span class="g-route"></span>', needs: () => R.routes.length > 0 },
@@ -462,7 +459,7 @@
     if (S.on.has('counts') && S.rows.size) keys.push('<span><i class="k now"></i>now</span><span><i class="k y24"></i>2024 lists</span>');
     if (S.on.has('dots') && S.ps) keys.push('<span><span class="g-dot"></span>Circle: supporters now</span>');
     if (S.on.has('rings') && S.t) keys.push('<span><span class="g-ring"></span>Ring: 2024 supporters</span>');
-    if (S.on.has('plan') && S.plan) keys.push('<span><span class="g-plan">1</span>GOTV priority (gold outline), dashed line to the voting place it’s sent to</span>');
+    if (S.on.has('plan') && S.plan) keys.push('<span><span class="g-plan">★</span>GOTV priority (gold outline), dashed line to the voting place it’s sent to</span>');
     if (S.on.has('routes') && R.routes.length) keys.push(`<span><span class="g-route"></span>Route ${R.sel + 1} of ${R.routes.length}, numbered in knocking order</span>`);
     if (S.on.has('t1dots') && S.t1) keys.push('<span><span class="g-t1"></span>T1 household (ring: new to us; faded: everyone voted)</span>');
     if (S.on.has('t2dots') && S.calls) keys.push('<span><span class="g-t2"></span>Called: T2 (solid), said yes but not T2 yet (ring), do not contact (grey)</span>');
@@ -479,7 +476,7 @@
     if (r?.unknown != null) bits.push(`${pct(r.unknown)} no answer`);
     if (r?.t1) bits.push(`${fmt(r.t1.n)} on T1`);
     if (r?.calls?.t2) bits.push(`${fmt(r.calls.t2)} T2`);
-    if (r?.plan) bits.push(`priority ${r.plan.rank}`);
+    if (r?.plan) bits.push('GOTV priority');
     return bits.join(' · ');
   }
   function pollCard(key) {
@@ -500,7 +497,7 @@
     if (cells.length) h += `<div class="grid">${cells.join('')}</div>`;
     if (r.plan) {
       const pl = (S.plan.places || []).find(x => x.name === r.plan.place);
-      h += `<p class="flag plan"><b>GOTV priority ${r.plan.rank}:</b> send voters to ${esc(r.plan.place)}${pl ? ` (${esc(pl.address)})` : ''}.${r.plan.why ? ` ${esc(r.plan.why)}.` : ''}</p>`;
+      h += `<p class="flag plan"><b>GOTV priority:</b> send voters to ${esc(r.plan.place)}${pl ? ` (${esc(pl.address)})` : ''}.${r.plan.why ? ` ${esc(r.plan.why)}.` : ''}</p>`;
     }
     if (r.place) h += `<h4>2024 result · ${chip(lean(r.place.day))}</h4><p class="meta">Election day at ${esc(r.place.name)} (polls ${runs(r.place.polls)})</p>${partyBars(r.place.day)}`;
     else if (!r.p) h += '<p class="meta">A single-building poll (usually a care home), so it has no area on the map.</p>';
@@ -546,13 +543,13 @@
         <ul class="standing">${counts.map(({ s, n }) => `<li><span class="status st-${s.k}">${s.label}</span><b class="num">${n}</b></li>`).join('')}</ul>`);
     }
     if (S.plan) {
-      h.push(`<h2>GOTV ride plan</h2><ol class="plan-list">${S.plan.groups.map(g => {
+      h.push(`<h2>GOTV ride plan <span class="aside">all priority, no set order</span></h2><ul class="plan-list">${S.plan.groups.map(g => {
         const codes = g.polls.map(k => +pollKey(k)).filter(Number.isFinite).sort((a, b) => a - b);
         const rs = [...S.rows.values()].filter(r => g.polls.some(k => pollKey(k) === r.key));
         const now = rs.reduce((t, r) => t + (r.now || 0), 0), y = rs.reduce((t, r) => t + (r.y24 || 0), 0);
-        return `<li><span class="g-plan">${g.rank}</span><div><b>Polls ${runs(codes)} → ${esc(g.place)}</b>
+        return `<li><span class="g-plan">★</span><div><b>Polls ${runs(codes)} → ${esc(g.place)}</b>
           <small>${S.ps ? `${fmt(now)} supporters now` : ''}${S.ps && S.t ? ' · ' : ''}${S.t ? `${fmt(y)} on the 2024 lists` : ''}${g.why ? `. ${esc(g.why)}.` : ''}</small></div></li>`;
-      }).join('')}</ol>`);
+      }).join('')}</ul>`);
     }
     $('summary').innerHTML = h.join('');
     const loaded = [ps && `Poll Summary${ps.asOf ? ` (${day(ps.asOf)})` : ''}`, t && '2024 supporter lists', S.t1 && 'T1 list', S.calls && 'phone bank', S.plan && 'GOTV plan'].filter(Boolean);
@@ -561,10 +558,10 @@
     $('lockBtn').hidden = !(S.builtIn && ENC);
   }
   // the focus table: polls ranked by focus score, or the party's plan first
-  const planRank = r => r.plan ? r.plan.rank : 9;
+  const planRank = r => r.plan ? 0 : 9;  // the plan's polls are all priority, in no set order
   const COLS = [
     { k: 'rank', label: '#', get: r => r.f.rank, show: r => r.f.rank, r: true },
-    { k: 'code', label: 'Poll', get: r => r.sortCode, show: r => `${esc(r.label)}${r.plan ? ` <span class="g-plan" title="GOTV priority ${r.plan.rank}">${r.plan.rank}</span>` : ''}` },
+    { k: 'code', label: 'Poll', get: r => r.sortCode, show: r => `${esc(r.label)}${r.plan ? ' <span class="g-plan" title="GOTV priority">★</span>' : ''}` },
     { k: 'score', label: 'Focus', get: r => r.f.score, show: r => fmt(r.f.score), r: true, title: 'Focus score' },
     { k: 'skipped', label: 'No vote ’24', get: r => r.f.skipped, show: r => `${fmt(r.f.skipped)}${r.f.unchecked ? '*' : ''}`, r: true, when: () => !!S.t,
       title: '2024 supporters still on the voters list who didn’t vote in 2024' },
@@ -587,7 +584,7 @@
     $('pollHead').innerHTML = cols.map(c => `<th class="${c.r ? 'r' : ''}" ${c.title ? `title="${c.title}"` : ''} ${c.k === sort.k && (S.sort || !byPlan) ? `aria-sort="${sort.dir > 0 ? 'ascending' : 'descending'}"` : ''}><button type="button" data-k="${c.k}">${c.label}</button></th>`).join('');
     let lastPlan = null;
     $('pollBody').innerHTML = rows.map(r => {
-      const band = byPlan && !S.sort && planRank(r) !== lastPlan ? (lastPlan = planRank(r), `<tr class="band"><td colspan="${cols.length}">${r.plan ? `Priority ${r.plan.rank}: ${esc(r.plan.place)}` : 'Not in the plan'}</td></tr>`) : '';
+      const band = byPlan && !S.sort && planRank(r) !== lastPlan ? (lastPlan = planRank(r), `<tr class="band"><td colspan="${cols.length}">${r.plan ? 'GOTV priority polls' : 'Not in the plan'}</td></tr>`) : '';
       return `${band}<tr class="go${r.key === S.sel ? ' sel' : ''}" tabindex="0" data-key="${esc(r.key)}">${cols.map(c => `<td class="${c.r ? 'r' : ''}">${c.show(r)}</td>`).join('')}</tr>`;
     }).join('');
     const sum = k => rows.reduce((t, r) => t + (k in r.f ? r.f[k] : r[k] || 0), 0);
@@ -642,7 +639,7 @@
     const out = [];
     for (const g of S.plan?.groups || []) {
       const codes = g.polls.map(k => +pollKey(k)).filter(Number.isFinite).sort((a, b) => a - b);
-      out.push({ id: 'g' + g.rank, label: `Priority ${g.rank}: polls ${runs(codes)} (${g.place})`, polls: new Set(codes.map(String)) });
+      out.push({ id: 'g' + g.rank, label: `GOTV: polls ${runs(codes)} (${g.place})`, polls: new Set(codes.map(String)) });
     }
     [...S.focus.values()].filter(f => f.doors || S.doors.some(d => d.poll === f.key)).forEach(f =>
       out.push({ id: 'p' + f.key, label: `Poll ${f.key} · focus #${f.rank}`, polls: new Set([f.key]) }));
@@ -840,7 +837,7 @@
     const group = t => S.plan?.groups.find(g => 'g' + g.rank === t.id);
     const streetsOf = rt => [...new Set(rt.doors.map(d => d.civic.replace(/^\d+\s+/, '')))];
     const json = { kind: 'route-book', built: new Date().toISOString().slice(0, 10), pollSummary: S.ps?.asOf || '', knock: what, perRoute: size, maxWalkKm: maxLen / 1000,
-      routes: list.map((b, n) => ({ id: b.code, order: n + 1, area: group(b.t) ? `Priority ${group(b.t).rank}` : b.t.id === 'x' ? 'Other polls' : `Poll ${b.t.id.slice(1)}`,
+      routes: list.map((b, n) => ({ id: b.code, order: n + 1, area: group(b.t) ? `GOTV polls ${runs(group(b.t).polls.map(k => +pollKey(k)).filter(Number.isFinite).sort((x, y) => x - y))}` : b.t.id === 'x' ? 'Other polls' : `Poll ${b.t.id.slice(1)}`,
         place: group(b.t)?.place || '', polls: [...new Set(b.rt.doors.map(d => d.poll))].sort((x, y) => x - y), doors: b.rt.doors.length,
         people: b.rt.doors.reduce((t, d) => t + targetsAt(d, o), 0), km: +(b.rt.len / 1000).toFixed(1), minutes: Math.round(b.rt.minutes), streets: streetsOf(b.rt) })) };
     book = { o, list, json };
