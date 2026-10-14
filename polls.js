@@ -15,7 +15,7 @@
 
   // ------------------------------------------------------------------ map
   const { map, streetLabels, placeMarkers, styleBase, onTheme } = baseMap('map', [['roads', 300, true], ['mask', 340, true], ['data', 400],
-    ['plan', 410, true], ['routes', 415, true], ['marks', 420, true], ['t1', 425], ['t2', 427], ['streetLabels', 430, true], ['places', 440, true], ['tags', 460, true], ['doors', 465]]);
+    ['plan', 410, true], ['routes', 415, true], ['marks', 420, true], ['t1', 425, true], ['t2', 427, true], ['streetLabels', 430, true], ['places', 440, true], ['tags', 460, true], ['doors', 465]]);
   const dataCanvas = L.canvas({ pane: 'data', padding: 0.4, tolerance: 3 });
   const planCanvas = L.canvas({ pane: 'plan', padding: 0.4 });
   const markCanvas = L.canvas({ pane: 'marks', padding: 0.4 });
@@ -24,8 +24,32 @@
       .bindTooltip(() => pollTip(p.key), { sticky: true, direction: 'top', offset: [0, -10], opacity: 1 })
       .on('mouseover', () => p.layer.setStyle({ weight: 2.5, color: tok('fg') }))
       .on('mouseout', () => stylePoll(p))
-      .on('click', e => openPoll(p.key, e.latlng));
+      .on('click', e => {
+        L.DomEvent.stopPropagation(e);
+        const d = dotAt(e.latlng);
+        if (d) openHouse(d); else openPoll(p.key, e.latlng);
+      });
   });
+  // T1 and T2 dots sit on panes that let clicks through, so stacked dot layers never hide each other or the polls; a click
+  // anywhere opens the house whose dot is under it (the nearest one), else the poll
+  const drawn = { t1: new Map(), t2: new Map() };  // door -> radius of its dot on the map, per layer
+  function dotAt(latlng) {
+    const pt = map.latLngToContainerPoint(latlng);
+    let best = null, bestD = Infinity;
+    for (const [d, r] of [...drawn.t1, ...drawn.t2]) {
+      const q = map.latLngToContainerPoint(d.p), dist = Math.hypot(q.x - pt.x, q.y - pt.y);
+      if (dist <= r + 5 && dist < bestD) { best = d; bestD = dist; }
+    }
+    return best;
+  }
+  map.on('click', e => { const d = dotAt(e.latlng); if (d) openHouse(d); });
+  let hoverAt = 0;
+  map.on('mousemove', e => {
+    if (performance.now() - hoverAt < 40) return;
+    hoverAt = performance.now();
+    map.getContainer().classList.toggle('over-dot', !!dotAt(e.latlng));
+  });
+
   const marks = L.layerGroup().addTo(map);
   const planLayer = L.layerGroup();
   const planBadges = L.layerGroup();  // a priority number per group, shown when the poll labels (which carry it) are off
@@ -297,6 +321,7 @@
   const t1Layer = L.layerGroup().addTo(map), t1Canvas = L.canvas({ pane: 't1', padding: 0.4, tolerance: 4 });  // under the poll labels
   function drawT1() {
     t1Layer.clearLayers();
+    drawn.t1.clear();
     if (!S.t1 || !S.on.has('t1dots')) return;
     const c = tok('t1'), halo = tok('halo'), surface = tok('surface');
     for (const d of S.doors) {
@@ -305,8 +330,8 @@
       const r = 3.2 + Math.min(3, Math.sqrt(d.t1) - 1);
       contactRings(d, r, t1Canvas, 't1').forEach(x => t1Layer.addLayer(x));
       t1Layer.addLayer(L.circleMarker(d.p, { renderer: t1Canvas, pane: 't1', radius: r,
-        fillColor: fresh ? surface : c, fillOpacity: done ? 0.3 : 1, color: fresh ? c : halo, weight: fresh ? 2 : 1, opacity: done ? 0.5 : 1 })
-        .on('click', () => openT1(d)));
+        fillColor: fresh ? surface : c, fillOpacity: done ? 0.3 : 1, color: fresh ? c : halo, weight: fresh ? 2 : 1, opacity: done ? 0.5 : 1, interactive: false }));
+      drawn.t1.set(d, r);
     }
   }
   // rings around a T1 or T2 house: solid when a volunteer knocked, dashed (further out) when the phone bank called; each is
@@ -320,20 +345,16 @@
   }
   const contactLine = d => [d.knocked ? (d.opened ? 'door knocked, someone answered' : 'door knocked, nobody answered') : 'not door knocked yet',
     called(d) ? (answered(d) ? 'called, someone answered' : 'called, nobody answered') : 'not called yet'].join(' · ');
-  function openT1(d) {
-    const units = [...d.units].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+  function t1Part(d) {
+    if (!S.t1 || !d.t1) return '';
     const known = S.t1.people.some(x => x.on != null);
-    L.popup({ maxWidth: 300, autoPanPaddingTopLeft: [24, 72] }).setLatLng(d.p).setContent(`<div class="pop"><h3>${esc(d.civic)}</h3>
-      <p class="meta">Poll ${esc(d.poll)}${d.approx ? ' · location estimated' : ''}</p>
-      <p class="meta">${contactLine(d)}</p>
-      <p><b>${d.t1}</b> on the T1 list${known ? ` · ${d.t1 - d.t1New} already on our lists${d.t1New ? `, ${d.t1New} new` : ''}` : ''}${d.t1 - d.t1Left ? ` · ${d.t1 - d.t1Left} voted` : ''}</p>
-      ${d.not || d.voted ? `<p class="meta">Also ${[d.not && `${d.not} on the 2024 didn’t-vote list`, d.voted && `${d.voted} on the 2024 voted list`].filter(Boolean).join(', ')}.</p>` : ''}
-      ${units.length ? `<p class="meta units">Units: ${units.slice(0, 40).map(u => `<span>${esc(u)}</span>`).join('')}</p>` : ''}</div>`).openOn(map);
+    return `<p><b>${d.t1}</b> on the T1 list${known ? ` · ${d.t1 - d.t1New} already on our lists${d.t1New ? `, ${d.t1New} new` : ''}` : ''}${d.t1 - d.t1Left ? ` · ${d.t1 - d.t1Left} voted` : ''}</p>`;
   }
   // called households: solid when T2, a ring when they said yes but aren't T2 yet, grey when they asked not to be contacted
   const t2Layer = L.layerGroup().addTo(map), t2Canvas = L.canvas({ pane: 't2', padding: 0.4, tolerance: 4 });
   function drawT2() {
     t2Layer.clearLayers();
+    drawn.t2.clear();
     if (!S.calls || !S.on.has('t2dots')) return;
     const c = tok('t2'), halo = tok('halo'), surface = tok('surface'), muted = tok('muted');
     for (const d of S.doors) {
@@ -343,19 +364,25 @@
       const style = d.dnc ? { radius: 3, fillColor: muted, fillOpacity: 0.7, color: halo, weight: 1 }
         : t2 ? { radius: 4.5, fillColor: c, fillOpacity: 1, color: halo, weight: 1 } : { radius: 3.8, fillColor: surface, fillOpacity: 1, color: c, weight: 2 };
       contactRings(d, style.radius, t2Canvas, 't2').forEach(x => t2Layer.addLayer(x));
-      t2Layer.addLayer(L.circleMarker(d.p, { renderer: t2Canvas, pane: 't2', ...style }).on('click', () => openCall(d)));
+      t2Layer.addLayer(L.circleMarker(d.p, { renderer: t2Canvas, pane: 't2', ...style, interactive: false }));
+      drawn.t2.set(d, style.radius);
     }
   }
   const LIST_NAMES = { 1: '2024: said yes and voted (L1)', 2: '2024: said yes, didn’t vote (L2)', 3: '2024: undecided (L3)' };
   const ANSWER_NAMES = { Y: 'said yes', N: 'said no', U: 'not sure' };
-  function openCall(d) {
+  // one popup for a house: T1, phone bank, door knock and the 2024 lists together
+  function openHouse(d) {
+    const units = [...d.units].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
     const lines = d.homes.map(h => {
       const said = [h.answered ? (ANSWER_NAMES[h.answer] || 'answered, no result recorded') : 'not reached', h.flags & 8 && 'replied yes by text', h.flags & 2 && 'Conservative at the door'].filter(Boolean).join(', ');
       return `<li><b>${h.t2 ? 'T2' : h.dnc ? 'Do not contact' : LIST_NAMES[h.list] ? `L${h.list}` : 'Called'}</b> · ${h.voters} voter${h.voters > 1 ? 's' : ''} · ${said}${h.door ? ' · door knocked' : ''}${h.plan ? ` · plans to vote ${esc(h.plan)}` : ''}${h.ride ? ' · needs a ride' : ''}</li>`;
     }).join('');
     L.popup({ maxWidth: 320, autoPanPaddingTopLeft: [24, 72] }).setLatLng(d.p).setContent(`<div class="pop"><h3>${esc(d.civic)}</h3>
-      <p class="meta">Poll ${esc(d.poll)}${d.approx ? ' · location estimated' : ''}</p><p class="meta">${contactLine(d)}</p><ul class="calls">${lines}</ul>
-      ${d.dnc ? '<p class="flag">Someone here asked us to stop contacting them. This address is left off every route.</p>' : ''}</div>`).openOn(map);
+      <p class="meta">Poll ${esc(d.poll)}${d.approx ? ' · location estimated' : ''}</p><p class="meta">${contactLine(d)}</p>${t1Part(d)}
+      ${lines ? `<ul class="calls">${lines}</ul>` : ''}
+      ${d.dnc ? '<p class="flag">Someone here asked us to stop contacting them. This address is left off every route.</p>' : ''}
+      ${d.not || d.voted ? `<p class="meta">${[d.not && `${d.not} on the 2024 didn’t-vote list`, d.voted && `${d.voted} on the 2024 voted list`].filter(Boolean).join(', ')}.</p>` : ''}
+      ${units.length ? `<p class="meta units">Units: ${units.slice(0, 40).map(u => `<span>${esc(u)}</span>`).join('')}</p>` : ''}</div>`).openOn(map);
   }
   const planPlaces = () => (S.plan?.places || []).map(pl => ({ ...pl, hit: locate(pl.address) })).filter(pl => pl.hit);
   let planMarks = [];  // screen boxes the poll labels keep clear of: [latlng, dx, dy, w, h]
