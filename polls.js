@@ -94,7 +94,7 @@
     const get = civic => {
       const key = siteKey(civic);
       let d = doors.get(key);
-      if (!d) doors.set(key, d = { key, civic: prettyCivic(civic), units: new Set(), not: 0, notReg: 0, voted: 0, votedReg: 0, now: 0, phoneNot: 0, t1: 0, t1Left: 0, t1New: 0, homes: [], t2: 0, dnc: false, knocked: false });
+      if (!d) doors.set(key, d = { key, civic: prettyCivic(civic), units: new Set(), not: 0, notReg: 0, voted: 0, votedReg: 0, now: 0, phoneNot: 0, t1: 0, t1Left: 0, t1New: 0, homes: [], t2: 0, dnc: false, knocked: false, opened: false });
       return d;
     };
     for (const list of [S.lists?.voted, S.lists?.not].filter(Boolean)) {
@@ -121,13 +121,16 @@
       const d = get(a.civic);
       if (a.unit) d.units.add(a.unit);
       d.homes.push(h);
-      if (h.door) d.knocked = true;
+      if (h.door) d.knocked = d.opened = true;  // a knock in the workbook with an answer on file
       if (h.t2) d.t2 += h.voters;
       if (h.dnc) d.dnc = true;
     }
-    for (const street of S.knocked?.streets || []) {  // houses a volunteer has knocked
-      const a = listAddress(street);
-      if (a) get(a.civic).knocked = true;
+    for (const k of S.knocked?.houses || []) {  // houses a volunteer has knocked, and whether anyone opened the door
+      const a = listAddress(k.street);
+      if (!a) continue;
+      const d = get(a.civic);
+      d.knocked = true;
+      if (k.opened !== false) d.opened = true;
     }
     for (const seed of S.ix?.seeds || []) {
       const sup = (seed.n.con || 0) + (seed.n.lean || 0);
@@ -300,20 +303,29 @@
       if (!d.t1) continue;
       const fresh = d.t1New === d.t1, done = d.t1Left === 0;
       const r = 3.2 + Math.min(3, Math.sqrt(d.t1) - 1);
-      if (d.knocked) t1Layer.addLayer(knockRing(d, r, t1Canvas, 't1'));
+      contactRings(d, r, t1Canvas, 't1').forEach(x => t1Layer.addLayer(x));
       t1Layer.addLayer(L.circleMarker(d.p, { renderer: t1Canvas, pane: 't1', radius: r,
         fillColor: fresh ? surface : c, fillOpacity: done ? 0.3 : 1, color: fresh ? c : halo, weight: fresh ? 2 : 1, opacity: done ? 0.5 : 1 })
         .on('click', () => openT1(d)));
     }
   }
-  // a ring around a T1 or T2 house a volunteer has door knocked; no ring means nobody has knocked there yet
-  const knockRing = (d, r, renderer, pane) => L.circleMarker(d.p, { renderer, pane, radius: r + 3, fill: false, color: tok('fg'), weight: 1.8, interactive: false });
+  // rings around a T1 or T2 house: solid when a volunteer knocked, dashed (further out) when the phone bank called; each is
+  // dark/light (the text colour) when someone answered and orange when nobody did. No ring: not knocked, or not called, yet
+  const called = d => d.homes.length > 0, answered = d => d.homes.some(h => h.answered);
+  function contactRings(d, r, renderer, pane) {
+    const out = [], yes = tok('fg'), no = tok('missed');
+    if (d.knocked) out.push(L.circleMarker(d.p, { renderer, pane, radius: r + 3, fill: false, color: d.opened ? yes : no, weight: 2, interactive: false }));
+    if (called(d)) out.push(L.circleMarker(d.p, { renderer, pane, radius: r + 6.5, fill: false, color: answered(d) ? yes : no, weight: 1.6, dashArray: '3 2.5', interactive: false }));
+    return out;
+  }
+  const contactLine = d => [d.knocked ? (d.opened ? 'door knocked, someone answered' : 'door knocked, nobody answered') : 'not door knocked yet',
+    called(d) ? (answered(d) ? 'called, someone answered' : 'called, nobody answered') : 'not called yet'].join(' · ');
   function openT1(d) {
     const units = [...d.units].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
     const known = S.t1.people.some(x => x.on != null);
     L.popup({ maxWidth: 300, autoPanPaddingTopLeft: [24, 72] }).setLatLng(d.p).setContent(`<div class="pop"><h3>${esc(d.civic)}</h3>
       <p class="meta">Poll ${esc(d.poll)}${d.approx ? ' · location estimated' : ''}</p>
-      <p class="meta">${d.knocked ? 'Door knocked' : 'Not door knocked yet'}</p>
+      <p class="meta">${contactLine(d)}</p>
       <p><b>${d.t1}</b> on the T1 list${known ? ` · ${d.t1 - d.t1New} already on our lists${d.t1New ? `, ${d.t1New} new` : ''}` : ''}${d.t1 - d.t1Left ? ` · ${d.t1 - d.t1Left} voted` : ''}</p>
       ${d.not || d.voted ? `<p class="meta">Also ${[d.not && `${d.not} on the 2024 didn’t-vote list`, d.voted && `${d.voted} on the 2024 voted list`].filter(Boolean).join(', ')}.</p>` : ''}
       ${units.length ? `<p class="meta units">Units: ${units.slice(0, 40).map(u => `<span>${esc(u)}</span>`).join('')}</p>` : ''}</div>`).openOn(map);
@@ -330,7 +342,7 @@
       if (!t2 && !yes && !d.dnc) continue;
       const style = d.dnc ? { radius: 3, fillColor: muted, fillOpacity: 0.7, color: halo, weight: 1 }
         : t2 ? { radius: 4.5, fillColor: c, fillOpacity: 1, color: halo, weight: 1 } : { radius: 3.8, fillColor: surface, fillOpacity: 1, color: c, weight: 2 };
-      if (d.knocked) t2Layer.addLayer(knockRing(d, style.radius, t2Canvas, 't2'));
+      contactRings(d, style.radius, t2Canvas, 't2').forEach(x => t2Layer.addLayer(x));
       t2Layer.addLayer(L.circleMarker(d.p, { renderer: t2Canvas, pane: 't2', ...style }).on('click', () => openCall(d)));
     }
   }
@@ -342,7 +354,7 @@
       return `<li><b>${h.t2 ? 'T2' : h.dnc ? 'Do not contact' : LIST_NAMES[h.list] ? `L${h.list}` : 'Called'}</b> · ${h.voters} voter${h.voters > 1 ? 's' : ''} · ${said}${h.door ? ' · door knocked' : ''}${h.plan ? ` · plans to vote ${esc(h.plan)}` : ''}${h.ride ? ' · needs a ride' : ''}</li>`;
     }).join('');
     L.popup({ maxWidth: 320, autoPanPaddingTopLeft: [24, 72] }).setLatLng(d.p).setContent(`<div class="pop"><h3>${esc(d.civic)}</h3>
-      <p class="meta">Poll ${esc(d.poll)}${d.approx ? ' · location estimated' : ''} · ${d.knocked ? 'door knocked' : 'not door knocked yet'}</p><ul class="calls">${lines}</ul>
+      <p class="meta">Poll ${esc(d.poll)}${d.approx ? ' · location estimated' : ''}</p><p class="meta">${contactLine(d)}</p><ul class="calls">${lines}</ul>
       ${d.dnc ? '<p class="flag">Someone here asked us to stop contacting them. This address is left off every route.</p>' : ''}</div>`).openOn(map);
   }
   const planPlaces = () => (S.plan?.places || []).map(pl => ({ ...pl, hit: locate(pl.address) })).filter(pl => pl.hit);
@@ -424,8 +436,8 @@
     { k: 'dots', label: 'Circles: supporters now', sub: 'Size shows the count', glyph: '<span class="g-dot"></span>', needs: () => !!S.ps },
     { k: 'rings', label: 'Rings: 2024 supporters', sub: 'Same size scale as the circles', glyph: '<span class="g-ring"></span>', needs: () => !!S.t },
     { k: 'plan', label: 'GOTV ride plan', sub: 'Priority polls and where they’re sent', glyph: '<span class="g-plan">★</span>', needs: () => !!S.plan },
-    { k: 't1dots', label: 'T1 households', sub: 'Outer ring: door knocked · no ring: not yet', glyph: '<span class="g-t1"></span>', needs: () => !!S.t1 },
-    { k: 't2dots', label: 'T2 households', sub: 'Outer ring: door knocked · solid: T2 · hollow: said yes', glyph: '<span class="g-t2"></span>', needs: () => !!S.calls },
+    { k: 't1dots', label: 'T1 households', sub: 'Rings: door knocked (solid) and called (dashed)', glyph: '<span class="g-t1"></span>', needs: () => !!S.t1 },
+    { k: 't2dots', label: 'T2 households', sub: 'Solid: T2 · hollow: said yes · rings: knocked, called', glyph: '<span class="g-t2"></span>', needs: () => !!S.calls },
     { k: 'routes', label: 'Door-knocking routes', sub: 'From the Routes tab', glyph: '<span class="g-route"></span>', needs: () => R.routes.length > 0 },
     { k: 'places', label: '2024 voting places', glyph: '<span class="g-place"></span>' },
     { k: 'streets', label: 'Street names', sub: 'When zoomed in', glyph: '<span class="g-street">Ave</span>' },
@@ -474,7 +486,8 @@
     if (S.on.has('routes') && R.routes.length) keys.push(`<span><span class="g-route"></span>Route ${R.sel + 1} of ${R.routes.length}, numbered in knocking order</span>`);
     if (S.on.has('t1dots') && S.t1) keys.push('<span><span class="g-t1"></span>T1 household (hollow: new to us; faded: everyone voted)</span>');
     if (S.on.has('t2dots') && S.calls) keys.push('<span><span class="g-t2"></span>Called: T2 (solid), said yes but not T2 yet (hollow), do not contact (grey)</span>');
-    if ((S.on.has('t1dots') && S.t1) || (S.on.has('t2dots') && S.calls)) keys.push('<span><span class="g-knock"></span>Outer ring: door knocked. No ring: not knocked yet</span>');
+    if ((S.on.has('t1dots') && S.t1) || (S.on.has('t2dots') && S.calls)) keys.push('<span><span class="g-knock"></span>Solid ring: door knocked · dashed ring: called</span>',
+      '<span><span class="g-ans"></span>Someone answered</span><span><span class="g-ans miss"></span>Nobody answered (no ring: not yet)</span>');
     if (S.on.has('places')) keys.push('<span><span class="g-place"></span>2024 voting place</span>');
     if (keys.length) parts.push(`<div class="keys">${keys.join('')}</div>`);
     $('legend').innerHTML = parts.join('');

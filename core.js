@@ -282,10 +282,11 @@ window.SCC = (() => {
     return { ...callsFromRows(src), src };
   }
   // houses a volunteer has knocked: one address per house (the knocked_houses.csv t2_file.py writes)
-  const knockedFromRows = k => ({ name: k.name, src: k, streets: k.rows });
+  // rows are [address, door opened] (an older file has bare addresses: opened unknown)
+  const knockedFromRows = k => ({ name: k.name, src: k, houses: k.rows.map(r => Array.isArray(r) ? { street: r[0], opened: !!r[1] } : { street: r, opened: null }) });
   function parseKnocked(rows, head, file) {
-    const c = rows[head].map(cell).indexOf('Door-knocked address');
-    const out = rows.slice(head + 1).map(r => cell(r?.[c])).filter(Boolean);
+    const H = rows[head].map(cell), c = H.indexOf('Door-knocked address'), o = H.indexOf('Door opened');
+    const out = rows.slice(head + 1).filter(r => cell(r?.[c])).map(r => [cell(r[c]), o < 0 ? 1 : /^(yes|y|1|true)$/i.test(cell(r[o])) ? 1 : 0]);
     if (!out.length) throw new Error(`${file.name} has no addresses in it.`);
     return knockedFromRows({ name: file.name, rows: out });
   }
