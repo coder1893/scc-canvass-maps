@@ -10,7 +10,7 @@
   const app = $('app');
 
   const S = { ps: null, ix: null, lists: null, plan: null, t1: null, calls: null, knocked: null, t: null, rows: new Map(), doors: [], unchecked: new Set(), focus: new Map(),
-    fill: 'now', on: new Set(['numbers', 'counts', 'plan', 'streets', 'routes', 't1dots', 't2dots']), sel: null, sort: null, builtIn: false };
+    fill: 'now', on: new Set(['numbers', 'counts', 'plan', 'streets', 'routes', 't1dots', 't2dots', 'knockRings', 'callRings']), sel: null, sort: null, builtIn: false };
   const R = { routes: [], sel: 0, turf: null };  // the door-knocking routes on the map
 
   // ------------------------------------------------------------------ map
@@ -339,8 +339,8 @@
   const called = d => d.homes.length > 0, answered = d => d.homes.some(h => h.answered);
   function contactRings(d, r, renderer, pane) {
     const out = [], yes = tok('fg'), no = tok('missed');
-    if (d.knocked) out.push(L.circleMarker(d.p, { renderer, pane, radius: r + 3, fill: false, color: d.opened ? yes : no, weight: 2, interactive: false }));
-    if (called(d)) out.push(L.circleMarker(d.p, { renderer, pane, radius: r + 6.5, fill: false, color: answered(d) ? yes : no, weight: 1.6, dashArray: '3 2.5', interactive: false }));
+    if (d.knocked && S.on.has('knockRings')) out.push(L.circleMarker(d.p, { renderer, pane, radius: r + 3, fill: false, color: d.opened ? yes : no, weight: 2, interactive: false }));
+    if (called(d) && S.on.has('callRings')) out.push(L.circleMarker(d.p, { renderer, pane, radius: r + 6.5, fill: false, color: answered(d) ? yes : no, weight: 1.6, dashArray: '3 2.5', interactive: false }));
     return out;
   }
   const contactLine = d => [d.knocked ? (d.opened ? 'door knocked, someone answered' : 'door knocked, nobody answered') : 'not door knocked yet',
@@ -465,6 +465,8 @@
     { k: 'plan', label: 'GOTV ride plan', sub: 'Priority polls and where they’re sent', glyph: '<span class="g-plan">★</span>', needs: () => !!S.plan },
     { k: 't1dots', label: 'T1 households', sub: 'Rings: door knocked (solid) and called (dashed)', glyph: '<span class="g-t1"></span>', needs: () => !!S.t1 },
     { k: 't2dots', label: 'T2 households', sub: 'Solid: T2 · hollow: said yes · rings: knocked, called', glyph: '<span class="g-t2"></span>', needs: () => !!S.calls },
+    { k: 'knockRings', label: 'Door-knock rings', sub: 'Solid ring on T1 and T2 houses that were knocked', glyph: '<span class="g-ring-knock"></span>', needs: () => !!(S.t1 || S.calls) },
+    { k: 'callRings', label: 'Call rings', sub: 'Dashed ring on T1 and T2 houses that were called', glyph: '<span class="g-ring-call"></span>', needs: () => !!(S.t1 || S.calls) },
     { k: 'routes', label: 'Door-knocking routes', sub: 'From the Routes tab', glyph: '<span class="g-route"></span>', needs: () => R.routes.length > 0 },
     { k: 'places', label: '2024 voting places', glyph: '<span class="g-place"></span>' },
     { k: 'streets', label: 'Street names', sub: 'When zoomed in', glyph: '<span class="g-street">Ave</span>' },
@@ -488,8 +490,8 @@
       if (box.dataset.k === 'plan') { if (box.checked) planLayer.addTo(map); else planLayer.remove(); }  // badges follow in refreshTags
       if (box.dataset.k === 'dots' || box.dataset.k === 'rings') drawMarks();
       if (box.dataset.k === 'routes') drawRoutes();
-      if (box.dataset.k === 't1dots') drawT1();
-      if (box.dataset.k === 't2dots') drawT2();
+      if (box.dataset.k === 't1dots' || box.dataset.k === 'knockRings' || box.dataset.k === 'callRings') drawT1();
+      if (box.dataset.k === 't2dots' || box.dataset.k === 'knockRings' || box.dataset.k === 'callRings') drawT2();
       refreshTags();
     }
     renderLegend();
@@ -517,8 +519,8 @@
       const on = S.on.has(o.k), more = on && (DETAIL[o.k] ?? o.sub);
       return `<button type="button" class="lg-row" data-lg-on="${o.k}" aria-pressed="${on}" title="${on ? 'Hide' : 'Show'} ${esc(o.label)}"><i class="lg-check"></i>${o.glyph}<span>${o.label}${more ? `<small>${more}</small>` : ''}</span></button>`;
     });
-    if ((S.on.has('t1dots') && S.t1) || (S.on.has('t2dots') && S.calls)) rows.push('<span class="lg-note"><span class="g-knock"></span>Solid ring: door knocked · dashed ring: called</span>',
-      '<span class="lg-note"><span class="g-ans"></span>Someone answered <span class="g-ans miss"></span>Nobody answered · no ring: not yet</span>');
+    if (((S.on.has('t1dots') && S.t1) || (S.on.has('t2dots') && S.calls)) && (S.on.has('knockRings') || S.on.has('callRings')))
+      rows.push('<span class="lg-note"><span class="g-ans"></span>Someone answered <span class="g-ans miss"></span>Nobody answered · no ring: not yet</span>');
     const fills = FILLS.filter(x => x.needs());
     const chips = fills.length ? `<div class="lg-fills" role="group" aria-label="Colour the polls by">${fills.map(x => `<button type="button" data-lg-fill="${x.k}" aria-pressed="${f?.k === x.k}">${x.label}</button>`).join('')}</div>` : '';
     $('legend').innerHTML = `<div class="lg-head"><b>Map key</b><button type="button" class="lg-min" aria-expanded="${!S.legendMin}">${S.legendMin ? 'Show' : 'Hide'}</button></div>`
