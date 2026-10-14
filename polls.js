@@ -6,7 +6,7 @@
 (() => {
   const { P, $, fmt, pct, esc, day, reduced, phone, tok, lean, chip, RESULT_STEPS, RESULT_LABELS, classOf, runs, polls, pollByKey,
     partyBars, normStreet, siteKey, prettyCivic, locate, pollAt, listAddress, sniff, pollKey, parsePollSummary, parseInteractions, parseList,
-    listKind, NO_POLL, listFromRows, readWorkbook, t1FromRows, parseT1, callsFromRows, parseCalls, ENC, gate, baseMap, placer, sheet } = SCC;
+    listKind, NO_POLL, listFromRows, readWorkbook, t1FromRows, parseT1, callsFromRows, parseCalls, ENC, gate, sealExtra, baseMap, placer, sheet } = SCC;
   const app = $('app');
 
   const S = { ps: null, ix: null, lists: null, plan: null, t1: null, calls: null, t: null, rows: new Map(), doors: [], unchecked: new Set(), focus: new Map(),
@@ -941,12 +941,27 @@
     }
     $('loadError').hidden = !errors.length;
     $('loadError').textContent = errors.join(' ');
+    $('seal').hidden = !S.calls?.src;
     afterLoad();
   }
+  $('sealBtn').addEventListener('click', async () => {
+    try {
+      const text = await sealExtra({ calls: S.calls.src });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([text], { type: 'text/javascript' }));
+      a.download = 'campaign.extra.enc.js';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } catch (x) {
+      $('loadError').textContent = `The T2 file couldn’t be saved: ${x.message}`;
+      $('loadError').hidden = false;
+    }
+  });
   $('files').addEventListener('change', e => { loadFiles([...e.target.files]); e.target.value = ''; });
   $('lockBtn').addEventListener('click', () => {
     Object.assign(S, { ps: null, ix: null, lists: null, plan: null, t1: null, calls: null, t: null, rows: new Map(), doors: [], focus: new Map(), sel: null, builtIn: false });
     map.closePopup();
+    $('seal').hidden = true;
     afterLoad();
     lock();
   });

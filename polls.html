@@ -56,6 +56,10 @@
           </div>
           <p class="note">A Poll Summary, Interactions export, 2024 list, T1 list or T2 households file you load opens in this browser only and is never uploaded. Closing the tab clears it.</p>
           <p class="error" id="loadError" role="alert" hidden></p>
+          <div class="seal" id="seal" hidden>
+            <p class="note">To build this T2 file into the map for the whole team, save it locked with the team password and send the saved file to Claude to publish.</p>
+            <button type="button" class="btn" id="sealBtn">Save T2 for the team</button>
+          </div>
         </div>
       </section>
       <section class="pane" id="pane-focus" role="tabpanel" aria-labelledby="tab-focus" hidden>
@@ -116,6 +120,7 @@
 <script src="vendor/jspdf.umd.min.js"></script>
 <script src="data/public.js"></script>
 <script src="data/campaign.enc.js"></script>
+<script src="data/campaign.extra.enc.js"></script>
 <script src="core.js"></script>
 <script src="routes.js"></script>
 <script src="export.js"></script>

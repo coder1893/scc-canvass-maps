@@ -277,7 +277,8 @@ window.SCC = (() => {
       { yes: 'Y', no: 'N', 'not sure': 'U' }[get(r, 'Answer').toLowerCase()] || '', get(r, 'Vote plan'),
       FLAG_COLS.reduce((f, [n, k]) => f | (on(r, n) ? CALL_FLAGS[k] : 0), 0)]);
     if (!rowsOut.length) throw new Error(`${file.name} has no households in it.`);
-    return callsFromRows({ name: file.name, rows: rowsOut, checked: ['not24', 'door'] });
+    const src = { name: file.name, rows: rowsOut, checked: ['not24', 'door'] };
+    return { ...callsFromRows(src), src };
   }
   const NO_POLL = new Set(['', '999']);  // the lists use 999 for "no poll assigned"
   // the encrypted payload keeps list rows as [poll, street, has phone]
@@ -295,16 +296,41 @@ window.SCC = (() => {
   const ENC = window.CAMPAIGN_ENC;
   const KEY_SLOT = 'campaign-map-key';
   const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
-  const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const b64 = buf => {
+    const a = new Uint8Array(buf); let s = '';
+    for (let i = 0; i < a.length; i += 0x8000) s += String.fromCharCode(...a.subarray(i, i + 0x8000));
+    return btoa(s);
+  };
   async function deriveKey(password) {
     const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
     return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: unb64(ENC.salt), iterations: ENC.iterations },
       base, { name: 'AES-GCM', length: 256 }, true, ['decrypt']);
   }
-  async function openWith(key) {
-    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(ENC.iv) }, key, unb64(ENC.data));
+  async function decryptBox(box, key) {
+    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(box.iv) }, key, unb64(box.data));
     const text = await new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
     return JSON.parse(text);
+  }
+  // data/campaign.extra.enc.js holds data added later in the browser (see sealExtra), locked with the same key;
+  // it can only add to the built-in data, so a stale or broken extra file never stops the maps opening
+  async function openWith(key) {
+    const payload = await decryptBox(ENC, key);
+    const extra = window.CAMPAIGN_EXTRA;
+    if (extra?.data) {
+      try { Object.assign(payload, await decryptBox(extra, key)); } catch (x) { console.warn('campaign.extra.enc.js could not be opened', x); }
+    }
+    return payload;
+  }
+  // locks data loaded in this tab with the key the team password unlocked, as a campaign.extra.enc.js file to publish
+  async function sealExtra(obj) {
+    const saved = (() => { try { return sessionStorage.getItem(KEY_SLOT); } catch (e) { return null; } })();
+    if (!saved) throw new Error('Unlock the map with the team password first.');
+    const key = await crypto.subtle.importKey('raw', unb64(saved), { name: 'AES-GCM' }, false, ['encrypt']);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const gz = await new Response(new Blob([JSON.stringify(obj)]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
+    const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, gz);
+    const box = { v: 1, kind: 'extra', iv: b64(iv), data: b64(data), keys: Object.keys(obj) };
+    return `// Added in the browser on ${new Date().toISOString().slice(0, 10)}; locked with the team password.\nwindow.CAMPAIGN_EXTRA = ${JSON.stringify(box)};\n`;
   }
   async function rememberKey(key) {
     try { sessionStorage.setItem(KEY_SLOT, b64(await crypto.subtle.exportKey('raw', key))); } catch (e) { /* storage blocked */ }
@@ -419,5 +445,5 @@ window.SCC = (() => {
     normStreet, siteKey, prettyCivic, locate, inside, pollAt,
     CATEGORY, cell, isoDate, sniff, pollKey, parsePollSummary, parseInteractions, listAddress, parseList, listKind, NO_POLL, listFromRows, readWorkbook,
     T1_ON, t1FromRows, parseT1, CALL_FLAGS, callsFromRows, parseCalls,
-    ENC, gate, baseMap, placer, sheet };
+    ENC, gate, sealExtra, baseMap, placer, sheet };
 })();
