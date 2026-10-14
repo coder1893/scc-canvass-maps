@@ -143,6 +143,16 @@ async function reopen(route) {
   }, `Reopened ${route.id}`);
 }
 
+// take a route off the board (not while someone is out on it); loading the route book again brings it back
+async function removeRoute(route) {
+  return store.write(st => {
+    if (st.desk[route.id]?.status === 'out' || !st.routes.some(r => r.id === route.id)) return false;
+    st.routes = st.routes.filter(r => r.id !== route.id);
+    delete st.desk[route.id];
+    if (st.meta) st.meta.count = st.routes.length;
+  }, `Removed ${route.id}`);
+}
+
 // ------------------------------------------------------------------ volunteer side
 function setFlow(flow) { S.flow = flow; renderKiosk(); }
 function ticket(r, name, fresh) {
@@ -313,8 +323,9 @@ function renderBoard() {
         const band = r.area !== lastArea ? (lastArea = r.area, `<tr class="group"><td colspan="6">${esc(where(r))}</td></tr>`) : '';
         const d = deskOf(r.id), acts = d.status === 'out'
           ? `<button class="btn small" data-board="back" data-id="${esc(r.id)}">Hand in</button> <button class="btn small quiet" data-board="release" data-id="${esc(r.id)}">Release</button>`
-          : d.status === 'done' ? `<button class="btn small quiet" data-board="reopen" data-id="${esc(r.id)}">Reopen</button>`
-          : `<button class="btn small" data-board="assign" data-id="${esc(r.id)}">Give to…</button>`;
+          : (d.status === 'done' ? `<button class="btn small quiet" data-board="reopen" data-id="${esc(r.id)}">Reopen</button>`
+          : `<button class="btn small" data-board="assign" data-id="${esc(r.id)}">Give to…</button>`)
+            + ` <button class="btn small quiet" data-board="remove" data-id="${esc(r.id)}" title="Take this route off the board">Remove</button>`;
         return `${band}<tr><td class="code">${esc(r.id)}</td><td>${esc(r.polls.join(', '))}</td><td class="num">${r.doors}</td><td class="num">${hm(r.minutes)}</td><td>${statusCell(r)}</td><td class="acts">${acts}</td></tr>`;
       }).join('')}</tbody></table></div></section>`;
     const events = hist.map(e => ({ t: e.backAt, text: `${esc(e.name)} handed in ${esc(e.id)}: ${e.knocked} knocked${e.rides ? `, ${e.rides} ride${e.rides > 1 ? 's' : ''}` : ''}${e.finished ? '' : `, stopped at stop ${e.stoppedAt}`}${e.note ? ` (“${esc(e.note)}”)` : ''}` }))
@@ -325,7 +336,7 @@ function renderBoard() {
     h += `<div class="empty"><h2>No route book yet</h2><p class="note">On the <a href="${MAP_URL}">Poll map</a>, open the Routes tab and choose “Build the route book”, then “Copy for the check-in desk”, and paste it below.</p></div>`;
   }
   if (S.canAdmin) h += `<details class="admin" ${total ? '' : 'open'}><summary>Load a route book</summary>
-      <p class="note">Paste the text from the Poll map (Routes tab, “Copy for the check-in desk”). Routes keep their status when the codes match; routes that are out stay on the board until they’re handed in.
+      <p class="note">Paste the text from the Poll map (Routes tab, “Copy for the check-in desk”). Routes keep their status when the codes match, and removed routes come back; routes that are out stay on the board until they’re handed in.
       Print the matching packets from the same route book.</p>
       <textarea id="bookPaste" aria-label="Route book text"></textarea>
       <div class="row" style="margin-top:10px"><button class="btn primary" type="button" id="bookLoad">Load route book</button><span class="note" id="bookMsg">${esc(S.bookMsg || '')}</span></div>
@@ -363,6 +374,13 @@ $('boardBody').addEventListener('click', async e => {
     return;
   }
   b.disabled = true;
+  if (b.dataset.board === 'remove') {
+    const was = isDone(r.id) ? ' Its handed-in counts leave the totals too.' : '';
+    if (!confirm(`Remove route ${r.id} from the board? Volunteers won’t be given it.${was} Loading the route book again brings it back.`)) return;
+    b.disabled = true;
+    try { if (!(await removeRoute(r))) banner(`${r.id} wasn’t removed: someone has just taken it out. Hand it in or release it first.`); } catch (x) { banner(friendly(x)); b.disabled = false; }
+    return;
+  }
   try { if (b.dataset.board === 'release') await release(r); if (b.dataset.board === 'reopen') await reopen(r); } catch (x) { banner(friendly(x)); b.disabled = false; }
 });
 async function loadBook() {
