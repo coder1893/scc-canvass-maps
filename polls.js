@@ -6,7 +6,7 @@
 (() => {
   const { P, $, fmt, pct, esc, day, reduced, phone, tok, lean, chip, RESULT_STEPS, RESULT_LABELS, classOf, runs, polls, pollByKey,
     partyBars, normStreet, siteKey, prettyCivic, locate, pollAt, listAddress, sniff, pollKey, parsePollSummary, parseInteractions, parseList,
-    listKind, NO_POLL, listFromRows, readWorkbook, t1FromRows, parseT1, callsFromRows, ENC, gate, baseMap, placer, sheet } = SCC;
+    listKind, NO_POLL, listFromRows, readWorkbook, t1FromRows, parseT1, callsFromRows, parseCalls, ENC, gate, baseMap, placer, sheet } = SCC;
   const app = $('app');
 
   const S = { ps: null, ix: null, lists: null, plan: null, t1: null, calls: null, t: null, rows: new Map(), doors: [], unchecked: new Set(), focus: new Map(),
@@ -417,7 +417,7 @@
     { k: 'rings', label: 'Rings: 2024 supporters', sub: 'Same size scale as the circles', glyph: '<span class="g-ring"></span>', needs: () => !!S.t },
     { k: 'plan', label: 'GOTV ride plan', sub: 'Priority polls and where they’re sent', glyph: '<span class="g-plan">1</span>', needs: () => !!S.plan },
     { k: 't1dots', label: 'T1 households', sub: 'Solid: already on our lists · ring: new to us', glyph: '<span class="g-t1"></span>', needs: () => !!S.t1 },
-    { k: 't2dots', label: 'Called households', sub: 'Solid: T2 · ring: said yes · grey: do not contact', glyph: '<span class="g-t2"></span>', needs: () => !!S.calls },
+    { k: 't2dots', label: 'T2 households', sub: 'Solid: T2 · ring: said yes · grey: do not contact', glyph: '<span class="g-t2"></span>', needs: () => !!S.calls },
     { k: 'routes', label: 'Door-knocking routes', sub: 'From the Routes tab', glyph: '<span class="g-route"></span>', needs: () => R.routes.length > 0 },
     { k: 'places', label: '2024 voting places', glyph: '<span class="g-place"></span>' },
     { k: 'streets', label: 'Street names', sub: 'When zoomed in', glyph: '<span class="g-street">Ave</span>' },
@@ -933,7 +933,8 @@
         else if (kind === 'list') { const l = parseList(rows, head, f, listKind(f.name)); S.lists = { ...S.lists, [l.kind]: l }; }
         else if (kind === 'ix') S.ix = parseInteractions(rows, head, f);
         else if (kind === 't1') S.t1 = parseT1(rows, head, f);
-        else errors.push(`${f.name} isn’t a Poll Summary, Interactions export, 2024 supporter list or T1 list.`);
+        else if (kind === 'calls') { S.calls = parseCalls(rows, head, f); S.on.add('t2dots'); }
+        else errors.push(`${f.name} isn’t a Poll Summary, Interactions export, 2024 supporter list, T1 list or T2 households file.`);
       } catch (x) {
         errors.push(`${f.name} couldn’t be read: ${x.message}`);
       }

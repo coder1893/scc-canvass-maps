@@ -133,6 +133,7 @@ window.SCC = (() => {
   function sniff(rows) {
     for (let i = 0; i < Math.min(rows.length, 120); i++) {
       const r = rows[i] || [];
+      if (r.some(v => cell(v) === 'Household address') && r.some(v => cell(v) === 'Calling list')) return ['calls', i];
       if (cell(r[0]) === 'Poll' && r.some(v => cell(v) === 'Reg Voters')) return ['ps', i];
       if (cell(r[0]) === 'Date' && cell(r[1]) === 'Voter') return ['ix', i];
       if (r.some(v => cell(v) === 'Street') && r.some(v => cell(v) === 'Poll') && r.some(v => cell(v) === 'Voter_ID')) return ['list', i];
@@ -264,6 +265,19 @@ window.SCC = (() => {
       return h;
     });
     return { name: c.name, texts: c.texts || null, first: c.first, last: c.last, noAddress: c.noAddress || 0, doorChecked, homes };
+  }
+  // the T2 households file written by t2_file.py: one row per household the phone bank called, no names or numbers
+  function parseCalls(rows, head, file) {
+    const H = rows[head].map(cell), col = n => H.indexOf(n), get = (r, n) => col(n) < 0 ? '' : cell(r[col(n)]);
+    const on = (r, n) => /^(yes|y|1|true)$/i.test(get(r, n));
+    const FLAG_COLS = [['Door knocked', 'door'], ['Conservative at door', 'doorCon'], ['Didn\u2019t vote 2024', 'not24'], ["Didn't vote 2024", 'not24'],
+      ['Said yes by text', 'textYes'], ['Do not contact', 'dnc'], ['Bad number', 'badNumber'], ['Chinese line', 'chinese'], ['Ride needed', 'ride']];
+    const rowsOut = rows.slice(head + 1).filter(r => r && get(r, 'Household address')).map(r => [get(r, 'Poll'), get(r, 'Household address'),
+      { L1: 1, L2: 2, L3: 3 }[get(r, 'Calling list')] || 0, +get(r, 'Voters') || 1, on(r, 'Answered') ? 1 : 0,
+      { yes: 'Y', no: 'N', 'not sure': 'U' }[get(r, 'Answer').toLowerCase()] || '', get(r, 'Vote plan'),
+      FLAG_COLS.reduce((f, [n, k]) => f | (on(r, n) ? CALL_FLAGS[k] : 0), 0)]);
+    if (!rowsOut.length) throw new Error(`${file.name} has no households in it.`);
+    return callsFromRows({ name: file.name, rows: rowsOut, checked: ['not24', 'door'] });
   }
   const NO_POLL = new Set(['', '999']);  // the lists use 999 for "no poll assigned"
   // the encrypted payload keeps list rows as [poll, street, has phone]
@@ -404,6 +418,6 @@ window.SCC = (() => {
     PARTIES, valid, lean, leanText, leanVar, chip, RESULT_STEPS, RESULT_LABELS, classOf, sumWays, total, ridingConShare, places, placeOf, runs, polls, pollByKey, partyBars,
     normStreet, siteKey, prettyCivic, locate, inside, pollAt,
     CATEGORY, cell, isoDate, sniff, pollKey, parsePollSummary, parseInteractions, listAddress, parseList, listKind, NO_POLL, listFromRows, readWorkbook,
-    T1_ON, t1FromRows, parseT1, CALL_FLAGS, callsFromRows,
+    T1_ON, t1FromRows, parseT1, CALL_FLAGS, callsFromRows, parseCalls,
     ENC, gate, baseMap, placer, sheet };
 })();
