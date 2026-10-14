@@ -249,6 +249,22 @@ window.SCC = (() => {
     }
     return { name: file.name, checked: [], people };
   }
+  // phone-bank households: [poll, street, list 1/2/3, voters, answered, answer Y/N/U, vote plan, flags]. T2 is a household from
+  // the 2024 said-yes-didn't-vote list (L2, or on that list by address) that a caller reached, that said yes (on the phone, by
+  // text or at the door), that a volunteer knocked, and that hasn't asked us to stop contacting them
+  const CALL_FLAGS = { door: 1, doorCon: 2, not24: 4, textYes: 8, dnc: 16, badNumber: 32, chinese: 64, ride: 128 };
+  function callsFromRows(c) {
+    const F = CALL_FLAGS, doorChecked = (c.checked || []).includes('door');
+    const homes = c.rows.map(([poll, street, list, voters, answered, answer, plan, flags]) => {
+      const h = { poll: pollKey(poll), street, list, voters: voters || 1, answered: !!answered, answer, plan, flags,
+        dnc: !!(flags & F.dnc), door: !!(flags & F.door), not24: list === 2 || !!(flags & F.not24),
+        yes: answer === 'Y' || !!(flags & (F.textYes | F.doorCon)), ride: !!(flags & F.ride) };
+      h.nearT2 = h.not24 && h.answered && h.yes && !h.dnc;  // everything but the door knock
+      h.t2 = h.nearT2 && h.door;
+      return h;
+    });
+    return { name: c.name, texts: c.texts || null, first: c.first, last: c.last, noAddress: c.noAddress || 0, doorChecked, homes };
+  }
   const NO_POLL = new Set(['', '999']);  // the lists use 999 for "no poll assigned"
   // the encrypted payload keeps list rows as [poll, street, has phone]
   // ...and, when the voters-by-last-name file was matched, whether the person is still on the voters list
@@ -388,6 +404,6 @@ window.SCC = (() => {
     PARTIES, valid, lean, leanText, leanVar, chip, RESULT_STEPS, RESULT_LABELS, classOf, sumWays, total, ridingConShare, places, placeOf, runs, polls, pollByKey, partyBars,
     normStreet, siteKey, prettyCivic, locate, inside, pollAt,
     CATEGORY, cell, isoDate, sniff, pollKey, parsePollSummary, parseInteractions, listAddress, parseList, listKind, NO_POLL, listFromRows, readWorkbook,
-    T1_ON, t1FromRows, parseT1,
+    T1_ON, t1FromRows, parseT1, CALL_FLAGS, callsFromRows,
     ENC, gate, baseMap, placer, sheet };
 })();

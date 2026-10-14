@@ -6,7 +6,7 @@
   /* party identity: validated (OKLab, all pairs, protan/deutan) against the map surface */
   --con: #2459c2; --ndp: #f2852f; --grn: #16753a; --oth: #cc4793;
   --und: #868d97; --dnc: #b3261e; --sign: #c99a06; --even: #9aa0a8;
-  --ramp-contact: #3d4654; --ramp-find: #6a4fd0; --ramp-gotv: #0e7490; --y24: #0e7490; --t1: #1f7a3e;
+  --ramp-contact: #3d4654; --ramp-find: #6a4fd0; --ramp-gotv: #0e7490; --y24: #0e7490; --t1: #1f7a3e; --t2: #7c3aed;
   --font-display: "Archivo", "Arial Black", system-ui, sans-serif;
   --font-ui: "IBM Plex Sans Condensed", "Arial Narrow", "Roboto Condensed", system-ui, sans-serif;
   color-scheme: light;
@@ -17,7 +17,7 @@
     --road: #353c46; --road-major: #525b69; --road-label: #8f98a4; --edge: #e8ebef; --va: #6b7380; --mask: #0d1014; --halo: #10141a;
     --con: #5a88ec; --ndp: #d6782b; --grn: #1b7a42; --oth: #c95599;
     --und: #8d96a3; --dnc: #ff6b5e; --sign: #e8b923; --even: #707782;
-    --ramp-contact: #c9d0da; --ramp-find: #a28ff2; --ramp-gotv: #22b8cf; --y24: #22b8cf; --t1: #3fb26a;
+    --ramp-contact: #c9d0da; --ramp-find: #a28ff2; --ramp-gotv: #22b8cf; --y24: #22b8cf; --t1: #3fb26a; --t2: #b794f6;
     color-scheme: dark;
   }
 }
@@ -26,7 +26,7 @@
   --road: #353c46; --road-major: #525b69; --road-label: #8f98a4; --edge: #e8ebef; --va: #6b7380; --mask: #0d1014; --halo: #10141a;
   --con: #5a88ec; --ndp: #d6782b; --grn: #1b7a42; --oth: #c95599;
   --und: #8d96a3; --dnc: #ff6b5e; --sign: #e8b923; --even: #707782;
-  --ramp-contact: #c9d0da; --ramp-find: #a28ff2; --ramp-gotv: #22b8cf; --y24: #22b8cf; --t1: #3fb26a;
+  --ramp-contact: #c9d0da; --ramp-find: #a28ff2; --ramp-gotv: #22b8cf; --y24: #22b8cf; --t1: #3fb26a; --t2: #b794f6;
   color-scheme: dark;
 }
 
@@ -283,6 +283,10 @@ fieldset.switches legend .aside { font-weight: 500; color: var(--muted); margin-
 .k.now { background: var(--con); }
 .k.y24 { border: 2.5px solid var(--y24); background: transparent; }
 .k.t1 { background: var(--t1); border-radius: 2px; }
+.k.t2 { background: var(--t2); border-radius: 2px; }
+.g-t2 { display: inline-block; width: 11px; height: 11px; border-radius: 50%; background: var(--t2); border: 1px solid var(--halo); box-sizing: border-box; }
+.pop ul.calls { margin: 6px 0; padding-left: 18px; }
+.pop ul.calls li { margin: 2px 0; }
 .g-t1 { display: inline-block; width: 11px; height: 11px; border-radius: 50%; background: var(--t1); border: 1px solid var(--halo); box-sizing: border-box; }
 .g-num { font: 700 11px/1.45 var(--font-ui); padding: 0 5px; border-radius: 3px; border: 1px solid var(--va); background: var(--surface); }
 .g-counts { display: inline-flex; gap: 2px; }
