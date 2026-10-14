@@ -505,20 +505,37 @@
       const labels = isResult ? RESULT_LABELS : f.edges(f.breaks);
       parts.push(`<h3>${f.label}</h3><div class="scale">${sw}</div><div class="scale-labels">${labels.map(t => `<span>${t}</span>`).join('')}</div><p>${f.note}</p>`);
     }
-    const keys = [];
-    if (S.on.has('counts') && S.rows.size) keys.push('<span><i class="k now"></i>now</span><span><i class="k y24"></i>2024 lists</span>');
-    if (S.on.has('dots') && S.ps) keys.push('<span><span class="g-dot"></span>Circle: supporters now</span>');
-    if (S.on.has('rings') && S.t) keys.push('<span><span class="g-ring"></span>Ring: 2024 supporters</span>');
-    if (S.on.has('plan') && S.plan) keys.push('<span><span class="g-plan">★</span>GOTV priority (gold outline), dashed line to the voting place it’s sent to</span>');
-    if (S.on.has('routes') && R.routes.length) keys.push(`<span><span class="g-route"></span>Route ${R.sel + 1} of ${R.routes.length}, numbered in knocking order</span>`);
-    if (S.on.has('t1dots') && S.t1) keys.push('<span><span class="g-t1"></span>T1 household (hollow: new to us; faded: everyone voted)</span>');
-    if (S.on.has('t2dots') && S.calls) keys.push('<span><span class="g-t2"></span>Called: T2 (solid), said yes but not T2 yet (hollow), do not contact (grey)</span>');
-    if ((S.on.has('t1dots') && S.t1) || (S.on.has('t2dots') && S.calls)) keys.push('<span><span class="g-knock"></span>Solid ring: door knocked · dashed ring: called</span>',
-      '<span><span class="g-ans"></span>Someone answered</span><span><span class="g-ans miss"></span>Nobody answered (no ring: not yet)</span>');
-    if (S.on.has('places')) keys.push('<span><span class="g-place"></span>2024 voting place</span>');
-    if (keys.length) parts.push(`<div class="keys">${keys.join('')}</div>`);
-    $('legend').innerHTML = parts.join('');
+    // every layer the side panel offers, as a row you can click to switch it on or off; the key text shows while it's on
+    const DETAIL = {
+      counts: '<i class="k now"></i>now <i class="k y24"></i>2024 lists',
+      plan: 'Gold outline, dashed line to the voting place it’s sent to',
+      routes: R.routes.length ? `Route ${R.sel + 1} of ${R.routes.length}, numbered in knocking order` : '',
+      t1dots: 'Hollow: new to us · faded: everyone voted',
+      t2dots: 'Solid: T2 · hollow: said yes, not T2 yet · grey: do not contact',
+    };
+    const rows = OVERLAYS.filter(o => !o.needs || o.needs()).map(o => {
+      const on = S.on.has(o.k), more = on && (DETAIL[o.k] ?? o.sub);
+      return `<button type="button" class="lg-row" data-lg-on="${o.k}" aria-pressed="${on}" title="${on ? 'Hide' : 'Show'} ${esc(o.label)}"><i class="lg-check"></i>${o.glyph}<span>${o.label}${more ? `<small>${more}</small>` : ''}</span></button>`;
+    });
+    if ((S.on.has('t1dots') && S.t1) || (S.on.has('t2dots') && S.calls)) rows.push('<span class="lg-note"><span class="g-knock"></span>Solid ring: door knocked · dashed ring: called</span>',
+      '<span class="lg-note"><span class="g-ans"></span>Someone answered <span class="g-ans miss"></span>Nobody answered · no ring: not yet</span>');
+    const fills = FILLS.filter(x => x.needs());
+    const chips = fills.length ? `<div class="lg-fills" role="group" aria-label="Colour the polls by">${fills.map(x => `<button type="button" data-lg-fill="${x.k}" aria-pressed="${f?.k === x.k}">${x.label}</button>`).join('')}</div>` : '';
+    $('legend').innerHTML = `<div class="lg-head"><b>Map key</b><button type="button" class="lg-min" aria-expanded="${!S.legendMin}">${S.legendMin ? 'Show' : 'Hide'}</button></div>`
+      + (S.legendMin ? '' : chips + parts.join('') + (rows.length ? `<div class="keys">${rows.join('')}</div>` : ''));
   }
+
+  // the legend's rows and colour chips flip the same switches as the side panel
+  $('legend').addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.classList.contains('lg-min')) { S.legendMin = !S.legendMin; renderLegend(); return; }
+    const [group, k] = b.dataset.lgFill ? ['fill', b.dataset.lgFill] : b.dataset.lgOn ? ['on', b.dataset.lgOn] : [];
+    const box = group && document.querySelector(`input[data-group="${group}"][data-k="${k}"]`);
+    if (!box) return;
+    box.checked = !box.checked;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+  });
 
   // ------------------------------------------------------------------ tooltip and card
   function pollTip(key) {

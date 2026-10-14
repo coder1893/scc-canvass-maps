@@ -300,6 +300,23 @@ fieldset.switches legend .aside { font-weight: 500; color: var(--muted); margin-
 .g-street { font: 500 11px/1 var(--font-ui); letter-spacing: .04em; color: var(--road-label); }
 .legend .keys { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
 .legend .keys > span { display: flex; align-items: center; gap: 6px; }
+.legend { max-height: calc(100% - 60px); overflow: auto; }
+.lg-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12.5px; }
+.lg-min { all: unset; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--muted); padding: 2px 4px; border-radius: 4px; }
+.lg-min:hover, .lg-min:focus-visible { color: var(--fg); outline: 1px solid var(--rule); }
+.lg-fills { display: flex; flex-wrap: wrap; gap: 4px; }
+.lg-fills button { all: unset; cursor: pointer; font-size: 11.5px; font-weight: 600; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--rule); color: var(--muted); }
+.lg-fills button[aria-pressed="true"] { background: var(--fg); border-color: var(--fg); color: var(--bg); }
+.lg-row { all: unset; cursor: pointer; display: flex; align-items: center; gap: 7px; padding: 2px 4px; margin: 0 -4px; border-radius: 5px; font-size: 12px; color: var(--fg); }
+.lg-row:hover, .lg-row:focus-visible { background: color-mix(in srgb, var(--fg) 7%, transparent); }
+.lg-row[aria-pressed="false"] { color: var(--muted); }
+.lg-row[aria-pressed="false"] > :not(.lg-check) { opacity: .45; }
+.lg-row small { display: block; color: var(--muted); font-size: 11px; }
+.lg-check { flex: none; width: 22px; height: 12px; border-radius: 999px; background: var(--rule); position: relative; }
+.lg-check::after { content: ""; position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; border-radius: 50%; background: var(--surface); transition: left .12s; }
+.lg-row[aria-pressed="true"] .lg-check { background: var(--fg); }
+.lg-row[aria-pressed="true"] .lg-check::after { left: 12px; }
+.lg-note { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); padding-left: 29px; }
 .legend .keys .k { margin-right: 0; }
 .legend .keys .g-plan { width: 16px; height: 16px; font-size: 10px; }
 
