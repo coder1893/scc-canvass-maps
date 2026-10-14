@@ -1,8 +1,8 @@
 'use strict';
-// Check-in desk on GitHub Pages. The shared state is one JSON file (desk.json) in the campaign's private GitHub repository:
-// the route book, who has each route and what came back, and the one-volunteer-per-poll setting. Each office device connects
-// once with a fine-grained access token limited to that repository; every change is a commit made against the version the
-// device last read, so two devices can never claim the same route (GitHub refuses the second write and the device re-reads).
+// Check-in desk on GitHub Pages. The shared state lives in the campaign's Firebase Realtime Database (desk-config.js names it),
+// so any laptop that opens desk.html gets the same board with no login or setup. It is one JSON document: the route book, who
+// has each route and what came back, and the one-volunteer-per-poll setting. Every change is a Firebase transaction against the
+// latest version, so two devices can never claim the same route (the second one re-runs against the new board and is refused).
 // Volunteers type their names; no voter data is stored: routes carry polls, door counts and street names only.
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -13,62 +13,45 @@ const hm = min => min < 60 ? `${Math.round(min)} min` : `${Math.floor(min / 60)}
 const since = iso => hm(Math.max(0, (Date.now() - Date.parse(iso)) / 60000));
 const MAP_URL = 'polls.html';
 
-const S = { conn: null, ready: false, canAdmin: true, routes: [], desk: new Map(), meta: null,
-  settings: { onePerPoll: true }, view: 'checkin', flow: { step: 'ask' }, readOnly: false };
+const S = { ready: false, canAdmin: true, routes: [], desk: new Map(), meta: null,
+  settings: { onePerPoll: true }, view: 'checkin', flow: { step: 'ask' } };
 
-// ------------------------------------------------------------------ the desk file on GitHub
-// The connection (repository, token) is kept in this browser only. A missing file is an empty desk until a route book is loaded.
-const CONN_KEY = 'scc-desk-connection', FILE = 'desk.json';
-// A desk link carries the connection after '#join=', so another laptop opens the desk with no setup. The part after '#'
-// never leaves the browser (it isn't sent to GitHub Pages), but anyone holding the link can use the desk: share it like a key.
-const b64url = s => btoa(String.fromCharCode(...new TextEncoder().encode(s))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-const unb64url = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0)));
-const deskLink = conn => `${location.origin}${location.pathname}#join=${b64url(JSON.stringify({ repo: conn.repo, token: conn.token, ...(conn.api ? { api: conn.api } : {}) }))}`;
-function connFromLink() {
-  const m = location.hash.match(/^#join=([A-Za-z0-9_-]+)$/);
-  if (!m) return null;
-  history.replaceState(null, '', location.pathname + location.search);  // keep the key out of the address bar
-  try { const c = JSON.parse(unb64url(m[1])); return c && c.repo && c.token ? c : null; } catch (x) { return null; }
-}
+// ------------------------------------------------------------------ the shared desk in Firebase
+// The whole desk is stored as one JSON string at /desk/state (a string keeps Firebase from reshaping empty lists and objects).
 const empty = () => ({ kind: 'scc-desk', version: 1, routes: [], meta: null, settings: { onePerPoll: true }, desk: {} });
-const enc = obj => { const bytes = new TextEncoder().encode(JSON.stringify(obj, null, 1)); let bin = ''; for (const b of bytes) bin += String.fromCharCode(b); return btoa(bin); };
-const dec = b64 => JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64.replace(/\s/g, '')), c => c.charCodeAt(0))));
+const parse = v => { if (typeof v !== 'string' || !v) return empty(); try { return { ...empty(), ...JSON.parse(v) }; } catch (x) { return empty(); } };
 const store = {
-  sha: null, etag: null, state: empty(), listeners: [],
-  url() { return `${S.conn.api || 'https://api.github.com'}/repos/${S.conn.repo}/contents/${FILE}`; },
-  headers(extra) { return { Authorization: `Bearer ${S.conn.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...extra }; },
-  // read the file; with fresh=false a cheap "has it changed?" request (GitHub doesn't count unchanged answers against its limit)
-  async read(fresh) {
-    const r = await fetch(this.url(), { cache: 'no-store', headers: this.headers(!fresh && this.etag ? { 'If-None-Match': this.etag } : {}) });
-    if (r.status === 304) return false;
-    if (r.status === 404) { this.sha = null; this.etag = null; this.state = empty(); return true; }
-    if (!r.ok) throw { status: r.status };
-    const j = await r.json();
-    this.sha = j.sha;
-    this.etag = r.headers.get('ETag');
-    this.state = { ...empty(), ...dec(j.content) };
-    return true;
+  ref: null, online: false, state: empty(), listeners: [],
+  // open the database and resolve with the first copy of the desk; later changes from other devices arrive by themselves
+  connect(cfg) {
+    const app = firebase.initializeApp({ databaseURL: cfg.databaseURL }, 'desk');
+    const db = app.database();
+    if (cfg.emulator) db.useEmulator(cfg.emulator[0], cfg.emulator[1]);
+    db.ref('.info/connected').on('value', snap => { this.online = snap.val() === true; this.onLine?.(this.online); });
+    this.ref = db.ref('desk/state');
+    return new Promise((resolve, reject) => {
+      let first = true;
+      this.ref.on('value', snap => {
+        this.state = parse(snap.val());
+        if (first) { first = false; resolve(); } else this.emit();
+      }, err => { if (first) { first = false; reject(err); } else banner(friendly(err)); });
+    });
   },
-  // change the desk: re-read, apply, save against that version; if someone else saved first, start again
-  async write(change, message) {
-    for (let attempt = 0; attempt < 6; attempt++) {
-      await this.read(true);
-      const next = structuredClone(this.state);
-      if (change(next) === false) return false;
-      const r = await fetch(this.url(), { method: 'PUT', cache: 'no-store', headers: this.headers({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ message, content: enc(next), ...(this.sha ? { sha: this.sha } : {}) }) });
-      if (r.ok) {
-        const j = await r.json();
-        this.sha = j.content.sha;
-        this.etag = null;
-        this.state = next;
-        this.emit();
-        return true;
-      }
-      if (r.status !== 409 && r.status !== 422) throw { status: r.status };
-      await new Promise(res => setTimeout(res, 250 + Math.random() * 500 * (attempt + 1)));
-    }
-    throw { status: 'busy' };
+  // change the desk: Firebase runs `change` on the latest version and saves only if nobody saved in between (otherwise it runs
+  // it again on the newer version). `change` returning false means "not any more" (say, the route was just taken): nothing saved.
+  async write(change) {
+    if (!this.online) throw { status: 'offline' };
+    const tx = this.ref.transaction(cur => {
+      const next = parse(cur);
+      if (change(next) === false) return undefined;
+      return JSON.stringify(next);
+    }, undefined, false);
+    const late = new Promise((_, reject) => setTimeout(() => reject({ status: 'slow' }), 20000));
+    const res = await Promise.race([tx, late]);
+    if (!res.committed) return false;
+    this.state = parse(res.snapshot.val());
+    this.emit();
+    return true;
   },
   emit() { this.listeners.forEach(fn => fn(this.state)); },
 };
@@ -105,10 +88,9 @@ const pollsText = r => `Poll${r.polls.length > 1 ? 's' : ''} ${r.polls.join(', '
 
 // ------------------------------------------------------------------ writes
 function friendly(e) {
-  if (e && (e.status === 401 || e.status === 403)) { S.readOnly = true; return 'GitHub refused the save: this device’s access token can’t write to the desk repository. Reconnect it with a token that has Contents: Read and write.'; }
-  if (e && e.status === 404) return 'GitHub can’t find the desk repository. Check the repository name, or that the token covers it.';
-  if (e && e.status === 'busy') return 'Several people saved at once. Try again.';
-  return 'The desk couldn’t reach GitHub just now. Check the internet connection and try again.';
+  if (e && /permission/i.test(e.code || e.message || '')) return 'The desk’s database refused the save. Its rules need to allow the desk (see the setup notes).';
+  if (e && e.status === 'slow') return 'The desk is taking a long time to save. Check the board before trying again.';
+  return 'The desk can’t reach the internet just now. Check the connection and try again.';
 }
 // claim a route for a name: saved only if, in the latest version of the desk, the route is still free (and, unless the route was
 // picked by hand, still in a poll nobody else is in)
@@ -178,7 +160,7 @@ function ticket(r, name, fresh) {
 }
 function renderKiosk() {
   const k = $('kiosk'), f = S.flow;
-  if (!S.ready) { k.innerHTML = `<div class="empty"><h2>Connecting to the desk…</h2><p class="note">Reading the desk from GitHub.</p></div>`; return; }
+  if (!S.ready) { k.innerHTML = `<div class="empty"><h2>Connecting to the desk…</h2><p class="note">Reading the shared board.</p></div>`; return; }
   if (!S.routes.length) { k.innerHTML = `<div class="empty"><h2>No routes loaded yet</h2><p class="note">The coordinator loads the route book on the Board tab. It comes from the Poll map: Routes tab, then “Build the route book”.</p></div>`; return; }
   if (f.step === 'ask') {
     const left = candidates(), open = S.routes.filter(r => deskOf(r.id).status === 'open').length;
@@ -218,7 +200,6 @@ async function onName(e) {
   e.preventDefault();
   const name = tidy($('vName').value);
   if (name.length < 2) { $('vErr').textContent = 'Type your name to continue.'; return; }
-  if (S.readOnly) { $('vErr').textContent = 'This device can’t save to the desk. Reconnect it on the Board tab.'; return; }
   const out = routeOutFor(name);
   if (out) return setFlow({ step: 'already', route: out, name: deskOf(out.id).name || name });
   await assign(name);
@@ -305,7 +286,7 @@ function statusCell(r) {
 }
 function renderBoard() {
   const b = $('boardBody');
-  if (!S.ready) { b.innerHTML = '<div class="empty"><h2>Connecting…</h2><p class="note">Reading the desk from GitHub.</p></div>'; return; }
+  if (!S.ready) { b.innerHTML = '<div class="empty"><h2>Connecting…</h2><p class="note">Reading the shared board.</p></div>'; return; }
   const total = S.routes.length, done = S.routes.filter(r => isDone(r.id)).length, out = S.routes.filter(r => isOut(r.id)).length;
   const hist = S.routes.flatMap(r => (deskOf(r.id).history || []).filter(h => !h.released).map(h => ({ ...h, id: r.id })));
   const sum = k => hist.reduce((t, h) => t + (h[k] || 0), 0), doorsTotal = S.routes.reduce((t, r) => t + r.doors, 0);
@@ -330,7 +311,7 @@ function renderBoard() {
     h += `<section><div class="section-head"><h2>Routes</h2><p class="note">Handed out in this order: the party’s priority groups first, then other polls by focus rank.</p></div>
       <div class="table-wrap"><table><thead><tr><th>Route</th><th>Polls</th><th>Doors</th><th>Time</th><th>Status</th><th></th></tr></thead><tbody>${S.routes.map(r => {
         const band = r.area !== lastArea ? (lastArea = r.area, `<tr class="group"><td colspan="6">${esc(where(r))}</td></tr>`) : '';
-        const d = deskOf(r.id), acts = S.readOnly ? '' : d.status === 'out'
+        const d = deskOf(r.id), acts = d.status === 'out'
           ? `<button class="btn small" data-board="back" data-id="${esc(r.id)}">Hand in</button> <button class="btn small quiet" data-board="release" data-id="${esc(r.id)}">Release</button>`
           : d.status === 'done' ? `<button class="btn small quiet" data-board="reopen" data-id="${esc(r.id)}">Reopen</button>`
           : `<button class="btn small" data-board="assign" data-id="${esc(r.id)}">Give to…</button>`;
@@ -350,7 +331,7 @@ function renderBoard() {
       <div class="row" style="margin-top:10px"><button class="btn primary" type="button" id="bookLoad">Load route book</button><span class="note" id="bookMsg">${esc(S.bookMsg || '')}</span></div>
       ${S.meta ? `<p class="note" style="margin-top:8px">Loaded now: built ${esc(S.meta.built)} from the Poll Summary of ${esc(S.meta.pollSummary || 'unknown date')}, ${S.meta.count} routes of up to ${S.meta.perRoute} doors${S.meta.maxWalkKm ? ` and ${S.meta.maxWalkKm} km` : ''}, knocking ${esc(S.meta.knock)}.</p>` : ''}
     </details>`;
-  h += `<p class="note">This device saves to <b>${esc(S.conn.repo)}</b> on GitHub; every change is a commit there. <button class="btn small quiet" type="button" id="copyLink">Copy desk link for another laptop</button> <button class="btn small quiet" type="button" id="disconnect">Disconnect this device</button> <span class="note" id="linkMsg"></span></p>`;
+  h += `<p class="note">Every laptop that opens this page shares this board, and changes show up on the others within a second or two.</p>`;
   b.innerHTML = h;
 }
 $('boardBody').addEventListener('change', async e => {
@@ -362,13 +343,6 @@ $('boardBody').addEventListener('click', async e => {
   const b = e.target.closest('button');
   if (!b) return;
   if (b.id === 'bookLoad') return loadBook();
-  if (b.id === 'copyLink') {
-    const link = deskLink(S.conn);
-    try { await navigator.clipboard.writeText(link); $('linkMsg').textContent = 'Copied. Anyone with this link can use the desk, so share it only with the office team.'; }
-    catch (x) { window.prompt('Copy this desk link. Anyone with it can use the desk, so share it only with the office team.', link); }
-    return;
-  }
-  if (b.id === 'disconnect') { try { localStorage.removeItem(CONN_KEY); } catch (x) { /* storage blocked */ } location.reload(); return; }
   const r = S.routes.find(x => x.id === b.dataset.id);
   if (!r) return;
   if (b.dataset.board === 'back') { $('overlay').innerHTML = returnForm(r, 'board'); $('overlay').hidden = false; wireReturn($('overlay'), r, closeOverlay); return; }
@@ -457,62 +431,24 @@ function apply(st) {
   render();
 }
 store.listeners.push(apply);
-function showSetup(err) {
-  $('main').hidden = true;
-  document.querySelector('.tabs').hidden = true;
-  const box = $('setup');
-  box.hidden = false;
-  box.innerHTML = `<div><h2 style="margin:0;font:800 28px/1.15 var(--display)">Connect this device to the desk</h2>
-      <p class="note" style="margin-top:6px;font-size:16px">The desk keeps its list in the campaign’s private GitHub repository. Do this once on each office computer or tablet.</p></div>
-    <ol class="note" style="font-size:15px;color:var(--ink)">
-      <li>On GitHub, create a <b>private</b> repository for the desk, for example <code>scc-canvass-desk</code>.</li>
-      <li>Create a fine-grained access token (Settings → Developer settings → Personal access tokens → Fine-grained): <b>Only select repositories</b> → that repository; <b>Permissions</b> → Repository → <b>Contents: Read and write</b>. Nothing else.</li>
-      <li>Enter both below. The token stays in this browser; it only reaches that one repository.</li>
-      <li>After that, use <b>Copy desk link for another laptop</b> on the Board tab. Other laptops open that link and need no setup.</li>
-    </ol>
-    <form class="form" id="connForm" autocomplete="off">
-      <label class="field">Repository <small>owner/name</small><input id="cRepo" required placeholder="coder1893/scc-canvass-desk" pattern="[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"></label>
-      <label class="field">Access token<input id="cToken" required type="password" placeholder="github_pat_…" spellcheck="false"></label>
-      <p class="err" id="cErr" role="alert">${esc(err || '')}</p>
-      <div class="row"><button class="btn go" type="submit" id="cGo">Connect</button></div>
-    </form>`;
-  $('connForm').addEventListener('submit', async e => {
-    e.preventDefault();
-    const conn = { repo: tidy($('cRepo').value).replace(/^https:\/\/github\.com\//, '').replace(/\/$/, ''), token: $('cToken').value.trim() };
-    $('cGo').disabled = true;
-    $('cGo').textContent = 'Checking…';
-    try {
-      S.conn = conn;
-      await store.read(true);
-      try { localStorage.setItem(CONN_KEY, JSON.stringify(conn)); } catch (x) { /* storage blocked: connected for this visit only */ }
-      start();
-    } catch (x) {
-      S.conn = null;
-      $('cErr').textContent = x.status === 401 ? 'GitHub didn’t accept that token. Copy it again.' : x.status === 404 || x.status === 403 ? 'GitHub can’t open that repository with this token. Check the name and that the token covers it.' : friendly(x);
-      $('cGo').disabled = false;
-      $('cGo').textContent = 'Connect';
-    }
-  });
-}
-let polling = 0;
+// The plain link is all a laptop needs: the database is named in desk-config.js, which ships with the site.
 async function start() {
-  $('setup').hidden = true;
-  $('main').hidden = false;
-  document.querySelector('.tabs').hidden = false;
+  history.replaceState(null, '', location.pathname + location.search);  // old desk links carried a key after '#'; drop it
+  try { localStorage.removeItem('scc-desk-connection'); } catch (x) { /* storage blocked */ }
+  const cfg = window.DESK_DB;
+  if (!cfg || !cfg.databaseURL || typeof firebase === 'undefined') { banner('The desk isn’t switched on yet: its shared database hasn’t been set up.'); return; }
+  banner('Connecting to the desk…');
+  let gone = 0;
+  store.onLine = up => {
+    clearTimeout(gone);
+    if (up) { if (S.ready) banner(''); }
+    else if (S.ready) gone = setTimeout(() => banner('This laptop has lost the internet connection. The board may be out of date, and changes can’t be saved until it’s back.'), 4000);
+  };
+  try { await store.connect(cfg); }
+  catch (x) { banner(friendly(x)); return; }
   S.ready = true;
+  banner('');
   apply(store.state);
-  clearInterval(polling);
-  polling = setInterval(async () => {
-    if (document.hidden) return;
-    try { if (await store.read(false)) apply(store.state); banner(''); } catch (x) { banner(friendly(x)); }
-  }, 8000);
 }
 renderKiosk();
-(async () => {
-  let conn = connFromLink();
-  if (conn) { try { localStorage.setItem(CONN_KEY, JSON.stringify(conn)); } catch (x) { /* storage blocked: connected for this visit only */ } }
-  else { try { conn = JSON.parse(localStorage.getItem(CONN_KEY) || 'null'); } catch (x) { /* storage blocked */ } }
-  if (!conn) return showSetup();
-  S.conn = conn;
-  try { await store.read(true); start(); } catch (x) { S.conn = null; showSetup(friendly(x)); }
-})();
+start();
