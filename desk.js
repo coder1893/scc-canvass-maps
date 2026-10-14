@@ -19,6 +19,17 @@ const S = { conn: null, ready: false, canAdmin: true, routes: [], desk: new Map(
 // ------------------------------------------------------------------ the desk file on GitHub
 // The connection (repository, token) is kept in this browser only. A missing file is an empty desk until a route book is loaded.
 const CONN_KEY = 'scc-desk-connection', FILE = 'desk.json';
+// A desk link carries the connection after '#join=', so another laptop opens the desk with no setup. The part after '#'
+// never leaves the browser (it isn't sent to GitHub Pages), but anyone holding the link can use the desk: share it like a key.
+const b64url = s => btoa(String.fromCharCode(...new TextEncoder().encode(s))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64url = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0)));
+const deskLink = conn => `${location.origin}${location.pathname}#join=${b64url(JSON.stringify({ repo: conn.repo, token: conn.token, ...(conn.api ? { api: conn.api } : {}) }))}`;
+function connFromLink() {
+  const m = location.hash.match(/^#join=([A-Za-z0-9_-]+)$/);
+  if (!m) return null;
+  history.replaceState(null, '', location.pathname + location.search);  // keep the key out of the address bar
+  try { const c = JSON.parse(unb64url(m[1])); return c && c.repo && c.token ? c : null; } catch (x) { return null; }
+}
 const empty = () => ({ kind: 'scc-desk', version: 1, routes: [], meta: null, settings: { onePerPoll: true }, desk: {} });
 const enc = obj => { const bytes = new TextEncoder().encode(JSON.stringify(obj, null, 1)); let bin = ''; for (const b of bytes) bin += String.fromCharCode(b); return btoa(bin); };
 const dec = b64 => JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64.replace(/\s/g, '')), c => c.charCodeAt(0))));
@@ -339,7 +350,7 @@ function renderBoard() {
       <div class="row" style="margin-top:10px"><button class="btn primary" type="button" id="bookLoad">Load route book</button><span class="note" id="bookMsg">${esc(S.bookMsg || '')}</span></div>
       ${S.meta ? `<p class="note" style="margin-top:8px">Loaded now: built ${esc(S.meta.built)} from the Poll Summary of ${esc(S.meta.pollSummary || 'unknown date')}, ${S.meta.count} routes of up to ${S.meta.perRoute} doors${S.meta.maxWalkKm ? ` and ${S.meta.maxWalkKm} km` : ''}, knocking ${esc(S.meta.knock)}.</p>` : ''}
     </details>`;
-  h += `<p class="note">This device saves to <b>${esc(S.conn.repo)}</b> on GitHub; every change is a commit there. <button class="btn small quiet" type="button" id="disconnect">Disconnect this device</button></p>`;
+  h += `<p class="note">This device saves to <b>${esc(S.conn.repo)}</b> on GitHub; every change is a commit there. <button class="btn small quiet" type="button" id="copyLink">Copy desk link for another laptop</button> <button class="btn small quiet" type="button" id="disconnect">Disconnect this device</button> <span class="note" id="linkMsg"></span></p>`;
   b.innerHTML = h;
 }
 $('boardBody').addEventListener('change', async e => {
@@ -351,6 +362,12 @@ $('boardBody').addEventListener('click', async e => {
   const b = e.target.closest('button');
   if (!b) return;
   if (b.id === 'bookLoad') return loadBook();
+  if (b.id === 'copyLink') {
+    const link = deskLink(S.conn);
+    try { await navigator.clipboard.writeText(link); $('linkMsg').textContent = 'Copied. Anyone with this link can use the desk, so share it only with the office team.'; }
+    catch (x) { window.prompt('Copy this desk link. Anyone with it can use the desk, so share it only with the office team.', link); }
+    return;
+  }
   if (b.id === 'disconnect') { try { localStorage.removeItem(CONN_KEY); } catch (x) { /* storage blocked */ } location.reload(); return; }
   const r = S.routes.find(x => x.id === b.dataset.id);
   if (!r) return;
@@ -451,6 +468,7 @@ function showSetup(err) {
       <li>On GitHub, create a <b>private</b> repository for the desk, for example <code>scc-canvass-desk</code>.</li>
       <li>Create a fine-grained access token (Settings → Developer settings → Personal access tokens → Fine-grained): <b>Only select repositories</b> → that repository; <b>Permissions</b> → Repository → <b>Contents: Read and write</b>. Nothing else.</li>
       <li>Enter both below. The token stays in this browser; it only reaches that one repository.</li>
+      <li>After that, use <b>Copy desk link for another laptop</b> on the Board tab. Other laptops open that link and need no setup.</li>
     </ol>
     <form class="form" id="connForm" autocomplete="off">
       <label class="field">Repository <small>owner/name</small><input id="cRepo" required placeholder="coder1893/scc-canvass-desk" pattern="[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"></label>
@@ -491,8 +509,9 @@ async function start() {
 }
 renderKiosk();
 (async () => {
-  let conn = null;
-  try { conn = JSON.parse(localStorage.getItem(CONN_KEY) || 'null'); } catch (x) { /* storage blocked */ }
+  let conn = connFromLink();
+  if (conn) { try { localStorage.setItem(CONN_KEY, JSON.stringify(conn)); } catch (x) { /* storage blocked: connected for this visit only */ } }
+  else { try { conn = JSON.parse(localStorage.getItem(CONN_KEY) || 'null'); } catch (x) { /* storage blocked */ } }
   if (!conn) return showSetup();
   S.conn = conn;
   try { await store.read(true); start(); } catch (x) { S.conn = null; showSetup(friendly(x)); }
