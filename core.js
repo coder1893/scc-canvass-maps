@@ -463,6 +463,43 @@ window.SCC = (() => {
     try { saved = sessionStorage.getItem(KEY_SLOT); } catch (e) { /* storage blocked */ }
     return saved ? crypto.subtle.importKey('raw', unb64(saved), { name: 'AES-GCM' }, true, ['decrypt']) : null;
   }
+  // ------------------------------------------------------------------ sign-in log
+  // Each time someone unlocks a map with the password, one line goes to the campaign's Firebase database (desk-config.js): the
+  // time (Firebase's clock), which map, a random ID this browser keeps, the browser and device, and the internet address (from
+  // ipify, since a page can't see its own). No campaign data goes with it. The rules (database.rules.json) let the website add
+  // lines but never read them back; they're read in the Firebase console. A log that fails never stops the map opening.
+  const DEVICE_SLOT = 'campaign-map-device';
+  const randomId = () => [...crypto.getRandomValues(new Uint8Array(6))].map(b => b.toString(16).padStart(2, '0')).join('');
+  function deviceId() {
+    try {
+      let id = localStorage.getItem(DEVICE_SLOT);
+      if (!id) { id = randomId(); localStorage.setItem(DEVICE_SLOT, id); }
+      return id;
+    } catch (e) { return 'temp-' + randomId(); }  // a private window or blocked storage: a new ID each time
+  }
+  function deviceInfo() {
+    const ua = navigator.userAgent, touchMac = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;  // iPads say they're Macs
+    const pick = list => { for (const [n, re] of list) { const m = re.exec(ua); if (m) return m[1] ? `${n} ${m[1]}` : n; } return 'unknown'; };
+    const browser = pick([['Edge', /Edg(?:e|A|iOS)?\/(\d+)/], ['Opera', /OPR\/(\d+)/], ['Samsung Internet', /SamsungBrowser\/(\d+)/], ['Firefox', /(?:Firefox|FxiOS)\/(\d+)/],
+      ['Chrome', /(?:Chrome|CriOS)\/(\d+)/], ['Safari', /Version\/(\d+)[\d.]* .*Safari/]]);
+    const os = touchMac ? 'iPadOS' : pick([['iOS', /(?:iPhone|iPad|iPod).*? OS (\d+)/], ['Android', /Android (\d+)/], ['Windows', /Windows NT/], ['ChromeOS', /CrOS/], ['macOS', /Mac OS X/], ['Linux', /Linux/]]);
+    const type = touchMac || /iPad|Tablet/.test(ua) || (/Android/.test(ua) && !/Mobi/.test(ua)) ? 'tablet' : /Mobi|iPhone|iPod/.test(ua) ? 'phone' : 'computer';
+    return { browser, os, type, ua: ua.slice(0, 300) };
+  }
+  async function ipAddress() {
+    for (const host of ['https://api.ipify.org', 'https://api64.ipify.org']) {  // IPv4 first: it names the home or office network
+      try { const r = await fetch(`${host}?format=json`, { cache: 'no-store', signal: AbortSignal.timeout(4000) }); const ip = (await r.json()).ip; if (ip) return String(ip).slice(0, 45); } catch (e) { /* try the next */ }
+    }
+    return '';
+  }
+  async function logSignIn() {
+    const db = window.DESK_DB?.databaseURL;
+    if (!db) return;
+    try {
+      const entry = { at: { '.sv': 'timestamp' }, page: document.title.replace(/^.*?(Campaign|Poll) Map$/i, (m, w) => `${w.toLowerCase()} map`).slice(0, 40), device: deviceId(), ...deviceInfo(), ip: await ipAddress() };
+      await fetch(`${db.replace(/\/$/, '')}/signins.json`, { method: 'POST', body: JSON.stringify(entry), keepalive: true });
+    } catch (e) { /* offline or blocked: the map opens either way */ }
+  }
   // wires the password screen: calls onOpen(payload) once the data is decrypted; returns lock()
   function gate(onOpen) {
     if (!ENC) return () => {};
@@ -486,6 +523,7 @@ window.SCC = (() => {
       err.hidden = true;
       try {
         await unlockWith(await deriveKey($('pw').value), true);
+        logSignIn();  // only a typed password: a reload or the other map in the same tab isn't a new sign-in
       } catch (x) {
         if (x.name !== 'OperationError') console.error(x);  // a wrong password fails the decrypt; anything else is a bug
         err.textContent = 'That password didn’t work. Check it and try again.';
