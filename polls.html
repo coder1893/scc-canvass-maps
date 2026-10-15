@@ -4,8 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
-<!-- The page may load its own files and Google Fonts, and nothing may leave it: no fetch, no beacons, no form posts. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<!-- The page may load its own files and Google Fonts. The only thing that leaves it is the sign-in line (time, map, device ID,
+     browser, internet address) sent to the campaign's Firebase database; no campaign data and no loaded file ever leaves it. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src https://api.ipify.org https://api64.ipify.org https://scc-desk-default-rtdb.firebaseio.com; form-action 'none'; base-uri 'none'">
 <title>Surrey City Centre Poll Map</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -41,6 +42,7 @@
     </div>
     <div class="body" id="panelBody">
       <section class="pane" id="pane-map" role="tabpanel" aria-labelledby="tab-map">
+        <div class="search voted-search" id="who" hidden></div>
         <div id="summary" aria-live="polite"></div>
         <div class="layers-panel">
           <h2>Show on the map</h2>
@@ -53,11 +55,13 @@
             <label class="btn" for="files" id="chooseLabel">Load newer files</label>
             <input id="files" type="file" accept=".xlsx,.xls,.csv" multiple>
             <button type="button" class="btn quiet" id="lockBtn">Lock</button>
+            <button type="button" class="btn quiet" id="castClear" hidden>Clear the voted list</button>
           </div>
+          <p class="note">Load the Elections BC <b>participation report</b> (.csv) to see who has voted so far. Load each new report as it comes: they add up, and the list stays with this tab on both maps until you lock it or close the tab. Nothing needs publishing.</p>
           <p class="note">A Poll Summary, Interactions export, 2024 list, T1 list, T2 households or door-knocked houses file you load opens in this browser only and is never uploaded. Closing the tab clears it.</p>
           <p class="error" id="loadError" role="alert" hidden></p>
           <div class="seal" id="seal" hidden>
-            <p class="note">To build the T2 and door-knock files into the map for the whole team, save it locked with the team password and send the saved file to Claude to publish.</p>
+            <p class="note">To build the T2, door-knock or voters files into the map for the whole team, save it locked with the team password and send the saved file to Claude to publish.</p>
             <button type="button" class="btn" id="sealBtn">Save for the team</button>
           </div>
         </div>
@@ -91,6 +95,7 @@
             <label><input type="checkbox" id="kT1"> T1 list, not voted yet</label>
             <label><input type="checkbox" id="kT2"> T2 households</label>
             <label class="sub"><input type="checkbox" id="kReg" checked> Only people still on the voters list <small>(skips people who seem to have moved)</small></label>
+            <label class="sub"><input type="checkbox" id="kCast" checked> Leave out people who have voted <small>(participation report)</small></label>
           </fieldset>
           <div class="two">
             <label class="field"><span>Doors per route</span><span class="inline"><input type="number" id="perRoute" min="10" max="200" step="5" value="30"><small>at most</small></span></label>
@@ -121,6 +126,7 @@
 <script src="data/public.js"></script>
 <script src="data/campaign.enc.js"></script>
 <script src="data/campaign.extra.enc.js"></script>
+<script src="desk-config.js"></script>
 <script src="core.js"></script>
 <script src="routes.js"></script>
 <script src="export.js"></script>

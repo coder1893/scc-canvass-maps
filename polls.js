@@ -6,16 +6,26 @@
 (() => {
   const { P, $, fmt, pct, esc, day, reduced, phone, tok, lean, chip, RESULT_STEPS, RESULT_LABELS, classOf, runs, polls, pollByKey,
     partyBars, normStreet, siteKey, prettyCivic, locate, pollAt, listAddress, sniff, pollKey, parsePollSummary, parseInteractions, parseList,
-    listKind, NO_POLL, listFromRows, readWorkbook, t1FromRows, parseT1, callsFromRows, parseCalls, knockedFromRows, parseKnocked, ENC, gate, sealExtra, baseMap, placer, sheet } = SCC;
+    listKind, NO_POLL, listFromRows, readWorkbook, T1_ON, t1FromRows, parseT1, callsFromRows, parseCalls, knockedFromRows, parseKnocked,
+    stamp, parseCast, mergeCast, voterNosFromRows, parseVoterNos, castPeople, castSave, castSaved, voteSearch, ENC, gate, sealExtra, baseMap, placer, sheet } = SCC;
   const app = $('app');
 
-  const S = { ps: null, ix: null, lists: null, plan: null, t1: null, calls: null, knocked: null, t: null, rows: new Map(), doors: [], unchecked: new Set(), focus: new Map(),
-    fill: 'now', on: new Set(['numbers', 'counts', 'plan', 'streets', 'routes', 't1dots', 't2dots', 'knockRings', 'callRings']), sel: null, sort: null, builtIn: false };
+  const S = { ps: null, ix: null, lists: null, plan: null, t1: null, calls: null, knocked: null, cast: null, voterNos: null, castPpl: null, t: null, rows: new Map(), doors: [],
+    unchecked: new Set(), focus: new Map(), fill: 'now', on: new Set(['numbers', 'counts', 'plan', 'streets', 'routes', 'castDots', 't1dots', 't2dots', 'knockRings', 'callRings']),
+    sel: null, sort: null, builtIn: false };
   const R = { routes: [], sel: 0, turf: null };  // the door-knocking routes on the map
+  const who = voteSearch($('who'), () => ({ vn: S.voterNos, cast: S.cast }), x => {
+    const d = S.doors.find(d => d.key === x.home.key);
+    if (!d) return;
+    if (phone()) setSheet(false);
+    map.setView(d.p, 18, { animate: !reduced });
+    openHouse(d);
+  });
 
   // ------------------------------------------------------------------ map
   const { map, streetLabels, placeMarkers, styleBase, onTheme } = baseMap('map', [['roads', 300, true], ['mask', 340, true], ['data', 400],
-    ['plan', 410, true], ['routes', 415, true], ['marks', 420, true], ['t1', 425, true], ['t2', 427, true], ['streetLabels', 430, true], ['places', 440, true], ['tags', 460, true], ['doors', 465]]);
+    ['plan', 410, true], ['routes', 415, true], ['marks', 420, true], ['t1', 425, true], ['t2', 427, true], ['cast', 428, true], ['streetLabels', 430, true], ['places', 440, true],
+    ['tags', 460, true], ['doors', 465]]);
   const dataCanvas = L.canvas({ pane: 'data', padding: 0.4, tolerance: 3 });
   const planCanvas = L.canvas({ pane: 'plan', padding: 0.4 });
   const markCanvas = L.canvas({ pane: 'marks', padding: 0.4 });
@@ -30,13 +40,13 @@
         if (d) openHouse(d); else openPoll(p.key, e.latlng);
       });
   });
-  // T1 and T2 dots sit on panes that let clicks through, so stacked dot layers never hide each other or the polls; a click
-  // anywhere opens the house whose dot is under it (the nearest one), else the poll
-  const drawn = { t1: new Map(), t2: new Map() };  // door -> radius of its dot on the map, per layer
+  // T1, T2 and voted dots sit on panes that let clicks through, so stacked dot layers never hide each other or the polls; a
+  // click anywhere opens the house whose dot is under it (the nearest one), else the poll
+  const drawn = { t1: new Map(), t2: new Map(), cast: new Map() };  // door -> radius of its dot on the map, per layer
   function dotAt(latlng) {
     const pt = map.latLngToContainerPoint(latlng);
     let best = null, bestD = Infinity;
-    for (const [d, r] of [...drawn.t1, ...drawn.t2]) {
+    for (const [d, r] of [...drawn.t1, ...drawn.t2, ...drawn.cast]) {
       const q = map.latLngToContainerPoint(d.p), dist = Math.hypot(q.x - pt.x, q.y - pt.y);
       if (dist <= r + 5 && dist < bestD) { best = d; bestD = dist; }
     }
@@ -99,14 +109,23 @@
       t1by.set(x.poll, c);
       if (!keys.includes(x.poll) && x.poll && x.poll !== '999') keys.push(x.poll);
     }
+    // everyone who has voted so far, by the voting area the participation report gives them, and how many are ours
+    const castBy = new Map();
+    for (const x of S.castPpl || []) {
+      const c = castBy.get(x.poll) || { n: 0, ours: 0 };
+      c.n++; c.ours += x.ours;
+      castBy.set(x.poll, c);
+      if (!keys.includes(x.poll) && x.poll !== '999') keys.push(x.poll);
+    }
     S.rows = new Map();
     for (const key of keys) {
       const ps = S.ps?.rows.get(key), y = S.t && (S.t.by.get(key) || S.t.by.get(key.replace(/S$/, ''))), p = pollByKey.get(key);
-      if (!p && !(ps?.reg) && !t1by.has(key)) continue;  // site-based polls (care homes) without voters
-      S.rows.set(key, { key, label: p ? String(p.code) : key, sortCode: p ? p.code : parseInt(key, 10) + 0.5, p, place: p?.place,
+      if (!p && !(ps?.reg) && !t1by.has(key) && !castBy.has(key)) continue;  // site-based polls (care homes) without voters
+      S.rows.set(key, { key, label: p ? String(p.code) : key, sortCode: p ? p.code : parseInt(key, 10) + 0.5, p, place: p?.place, reg: ps?.reg || p?.reg2024 || 0,
         now: ps ? ps.support : null, supHh: ps?.supHh ?? null, unknown: ps ? ps.unknown : null, pop: ps?.pop ?? null, phones: ps?.phones ?? null,
         streets: ps?.streets || [], y24: S.t ? (y ? y.voted + y.not : 0) : null, voted: y?.voted || 0, not: y?.not || 0, notPhone: y?.notPhone || 0,
-        plan: planOf.get(key) || null, t1: S.t1 ? (t1by.get(key) || { n: 0, voted: 0, known: 0, fresh: 0 }) : null });
+        plan: planOf.get(key) || null, t1: S.t1 ? (t1by.get(key) || { n: 0, voted: 0, known: 0, fresh: 0 }) : null,
+        cast: S.cast ? (castBy.get(key) || { n: 0, ours: 0 }) : null });
     }
   }
   const rowOf = key => S.rows.get(key);
@@ -118,8 +137,16 @@
     const get = civic => {
       const key = siteKey(civic);
       let d = doors.get(key);
-      if (!d) doors.set(key, d = { key, civic: prettyCivic(civic), units: new Set(), not: 0, notReg: 0, voted: 0, votedReg: 0, now: 0, phoneNot: 0, t1: 0, t1Left: 0, t1New: 0, homes: [], t2: 0, dnc: false, knocked: false, opened: false });
+      if (!d) doors.set(key, d = { key, civic: prettyCivic(civic), units: new Set(), not: 0, notReg: 0, voted: 0, votedReg: 0, now: 0, phoneNot: 0, t1: 0, t1Left: 0, t1New: 0, homes: [], t2: 0,
+        dnc: false, knocked: false, opened: false, cast: 0, castOurs: 0, castUnits: new Set(), u: new Map() });
       return d;
+    };
+    // our registered people in each unit, to tell when the participation report has all of them
+    const unitOf = (d, a) => {
+      const k = a.unit.toUpperCase().replace(/[\s#]/g, '');
+      let u = d.u.get(k);
+      if (!u) d.u.set(k, u = { notReg: 0, votedReg: 0, t1On: 0, vf: 0, cast: 0 });
+      return u;
     };
     for (const list of [S.lists?.voted, S.lists?.not].filter(Boolean)) {
       for (const person of list.people) {
@@ -127,7 +154,8 @@
         if (!a) continue;
         const d = get(a.civic), reg = person.reg !== false;  // without the voters file everyone counts as registered
         if (a.unit) d.units.add(a.unit);
-        if (list.kind === 'not') { d.not++; if (reg) d.notReg++; if (person.phone) d.phoneNot++; } else { d.voted++; if (reg) d.votedReg++; }
+        if (list.kind === 'not') { d.not++; if (reg) { d.notReg++; unitOf(d, a).notReg++; } if (person.phone) d.phoneNot++; }
+        else { d.voted++; if (reg) { d.votedReg++; unitOf(d, a).votedReg++; } }
       }
     }
     for (const x of S.t1?.people || []) {  // the T1 list
@@ -138,6 +166,7 @@
       d.t1++;
       if (!x.voted) d.t1Left++;
       if (x.on === 0) d.t1New++;
+      if (!x.voted && x.on != null && (x.on & T1_ON.voters)) unitOf(d, a).t1On++;  // on the voters file, so the report can find them
     }
     for (const h of S.calls?.homes || []) {  // households the phone bank called
       const a = listAddress(h.street);
@@ -163,6 +192,33 @@
       d.now += sup;
       for (const u of seed.units.keys()) if (u) d.units.add(u);
     }
+    for (const x of S.castPpl || []) {  // people who have voted so far, at their home
+      const a = x.street && listAddress(x.street);
+      if (!a) continue;
+      const d = get(a.civic);
+      d.cast++;
+      if (!x.ours) continue;
+      d.castOurs++;
+      if (a.unit) d.castUnits.add(a.unit);
+      unitOf(d, a).cast++;
+    }
+    if (S.castPpl && S.voterNos) for (const street of S.voterNos.at.values()) {  // everyone on the voters file in a unit where one of ours voted
+      const a = listAddress(street), d = a && doors.get(siteKey(a.civic)), u = d?.u.get(a.unit.toUpperCase().replace(/[\s#]/g, ''));
+      if (u?.cast) u.vf++;
+    }
+    // Who is still to vote. The report names the person but our lists don't, so in a unit with several of our people it can't say
+    // which of them voted: take off only as many as the report leaves no doubt about. A unit where every one of our registered
+    // people on file is in the report is done; in one where some are, at most the rest are still to vote
+    for (const d of doors.values()) {
+      d.go = { not: d.not, notReg: d.notReg, voted: d.voted, votedReg: d.votedReg, t1Left: d.t1Left };
+      for (const u of d.u.values()) {
+        if (!u.cast) continue;
+        const left = Math.max(0, Math.max(u.vf, u.notReg + u.votedReg, u.t1On) - u.cast);
+        const not = u.notReg - Math.min(u.notReg, left), voted = u.votedReg - Math.min(u.votedReg, left);
+        d.go.not -= not; d.go.notReg -= not; d.go.voted -= voted; d.go.votedReg -= voted;
+        d.go.t1Left -= u.t1On - Math.min(u.t1On, left);
+      }
+    }
     S.doors = [];
     for (const d of doors.values()) {
       const hit = locate(d.civic), m = /^(\d+)\s+(.+)$/.exec(d.civic);
@@ -185,6 +241,14 @@
         if (h.t2) { c.t2++; c.t2Voters += h.voters; } else if (h.nearT2) c.near++;
       }
     }
+    // T1 people the participation report shows have voted, by the poll their home is in
+    S.t1Cast = 0;
+    for (const r of S.rows.values()) if (r.t1) r.t1.cast = 0;
+    for (const d of S.doors) {
+      const n = d.t1Left - d.go.t1Left, r = S.rows.get(d.poll);
+      S.t1Cast += n;
+      if (r?.t1) r.t1.cast += n;
+    }
     // polls the voters-by-last-name file doesn't cover at all (poll 27): don't drop their people as "moved"
     S.hasReg = !!S.lists && [S.lists.voted, S.lists.not].some(l => l?.people.some(x => x.reg != null));
     S.unchecked = new Set();
@@ -194,11 +258,11 @@
       for (const [k, [all, reg]] of by) if (all >= 20 && reg === 0) S.unchecked.add(k);
     }
   }
-  const KNOCK_GOTV = { not: true, voted: false, now: false, reg: true };
+  const KNOCK_GOTV = { not: true, voted: false, now: false, reg: true, cast: true };
   function targetsAt(d, o) {
     if (d.dnc) return 0;  // someone there asked us to stop contacting them
-    const free = !o.reg || S.unchecked.has(d.poll);
-    return (o.not ? (free ? d.not : d.notReg) : 0) + (o.voted ? (free ? d.voted : d.votedReg) : 0) + (o.now ? d.now : 0) + (o.t1 ? d.t1Left : 0) + (o.t2 ? d.t2 : 0);
+    const free = !o.reg || S.unchecked.has(d.poll), g = o.cast ? d.go : d;  // o.cast: leave out people who have voted
+    return (o.not ? (free ? g.not : g.notReg) : 0) + (o.voted ? (free ? g.voted : g.votedReg) : 0) + (o.now ? d.now : 0) + (o.t1 ? g.t1Left : 0) + (o.t2 ? d.t2 : 0);
   }
 
   // ------------------------------------------------------------------ focus ranking
@@ -263,6 +327,9 @@
   const countEdges = b => ['<' + b[0], ...b.slice(0, -1).map((v, i) => `${v}–${b[i + 1] - 1}`), b.at(-1) + '+'];
   const pctEdges = b => ['<' + pct(b[0]), ...b.slice(0, -1).map((v, i) => `${pct(v).slice(0, -1)}–${pct(b[i + 1])}`), pct(b.at(-1)) + '+'];
   const FILLS = [
+    { k: 'cast', label: 'Voted so far', sub: 'Share of registered voters who have voted', color: 'cast', breaks: [0.02, 0.05, 0.1, 0.2, 0.3], alpha: ALPHA6,
+      get: r => r.cast && r.reg ? r.cast.n / r.reg : null, edges: pctEdges, needs: () => !!S.cast,
+      note: 'Everyone in the Elections BC participation report, by the voting area it gives them, against the poll’s registered voters.' },
     { k: 'now', label: 'Supporters now', sub: 'Current support in the Poll Summary', color: 'con', breaks: COUNT_BREAKS, alpha: ALPHA6, get: r => r.now,
       edges: countEdges, needs: () => !!S.ps, note: 'Same scale as “2024 supporters”, so switching between the two compares them.' },
     { k: 'y24', label: '2024 supporters', sub: 'People on the 2024 supporter lists', color: 'y24', breaks: COUNT_BREAKS, alpha: ALPHA6, get: r => r.y24,
@@ -326,7 +393,7 @@
     const c = tok('t1'), halo = tok('halo'), surface = tok('surface');
     for (const d of S.doors) {
       if (!d.t1) continue;
-      const fresh = d.t1New === d.t1, done = d.t1Left === 0;
+      const fresh = d.t1New === d.t1, done = d.go.t1Left === 0;
       const r = 3.2 + Math.min(3, Math.sqrt(d.t1) - 1);
       contactRings(d, r, t1Canvas, 't1').forEach(x => t1Layer.addLayer(x));
       t1Layer.addLayer(L.circleMarker(d.p, { renderer: t1Canvas, pane: 't1', radius: r,
@@ -348,7 +415,28 @@
   function t1Part(d) {
     if (!S.t1 || !d.t1) return '';
     const known = S.t1.people.some(x => x.on != null);
-    return `<p><b>${d.t1}</b> on the T1 list${known ? ` · ${d.t1 - d.t1New} already on our lists${d.t1New ? `, ${d.t1New} new` : ''}` : ''}${d.t1 - d.t1Left ? ` · ${d.t1 - d.t1Left} voted` : ''}</p>`;
+    return `<p><b>${d.t1}</b> on the T1 list${known ? ` · ${d.t1 - d.t1New} already on our lists${d.t1New ? `, ${d.t1New} new` : ''}` : ''}${d.t1 - d.go.t1Left ? ` · ${d.t1 - d.go.t1Left} voted` : ''}</p>`;
+  }
+  // people who have voted so far: solid where one of ours voted, a ring where the only voters there aren't on our lists
+  const castLayer = L.layerGroup().addTo(map), castCanvas = L.canvas({ pane: 'cast', padding: 0.4, tolerance: 4 });
+  function drawCast() {
+    castLayer.clearLayers();
+    drawn.cast.clear();
+    if (!S.cast || !S.on.has('castDots')) return;
+    const c = tok('cast'), halo = tok('halo'), surface = tok('surface');
+    for (const d of S.doors) {
+      if (!d.cast) continue;
+      const ours = d.castOurs > 0, r = 3.4 + Math.min(3, Math.sqrt(d.cast) - 1);
+      castLayer.addLayer(L.circleMarker(d.p, { renderer: castCanvas, pane: 'cast', radius: r, interactive: false,
+        fillColor: ours ? c : surface, fillOpacity: 1, color: ours ? halo : c, weight: ours ? 1 : 2 }));
+      drawn.cast.set(d, r);
+    }
+  }
+  const byUnit = (a, b) => a.localeCompare(b, 'en', { numeric: true });
+  function castPart(d) {
+    if (!S.cast || !d.cast) return '';
+    const ours = d.castOurs === d.cast ? ', all on our supporter lists' : d.castOurs ? `, ${d.castOurs} on our supporter lists` : ', none on our lists';
+    return `<p><i class="k cast"></i><b>${d.cast}</b> voted so far${ours}${esc(castUnitsOf(d))}</p>`;
   }
   // called households: solid when T2, a ring when they said yes but aren't T2 yet, grey when they asked not to be contacted
   const t2Layer = L.layerGroup().addTo(map), t2Canvas = L.canvas({ pane: 't2', padding: 0.4, tolerance: 4 });
@@ -378,7 +466,7 @@
       return `<li><b>${h.t2 ? 'T2' : h.dnc ? 'Do not contact' : LIST_NAMES[h.list] ? `L${h.list}` : 'Called'}</b> · ${h.voters} voter${h.voters > 1 ? 's' : ''} · ${said}${h.door ? ' · door knocked' : ''}${h.plan ? ` · plans to vote ${esc(h.plan)}` : ''}${h.ride ? ' · needs a ride' : ''}</li>`;
     }).join('');
     L.popup({ maxWidth: 320, autoPanPaddingTopLeft: [24, 72] }).setLatLng(d.p).setContent(`<div class="pop"><h3>${esc(d.civic)}</h3>
-      <p class="meta">Poll ${esc(d.poll)}${d.approx ? ' · location estimated' : ''}</p><p class="meta">${contactLine(d)}</p>${t1Part(d)}
+      <p class="meta">Poll ${esc(d.poll)}${d.approx ? ' · location estimated' : ''}</p><p class="meta">${contactLine(d)}</p>${castPart(d)}${t1Part(d)}
       ${lines ? `<ul class="calls">${lines}</ul>` : ''}
       ${d.dnc ? '<p class="flag">Someone here asked us to stop contacting them. This address is left off every route.</p>' : ''}
       ${d.not || d.voted ? `<p class="meta">${[d.not && `${d.not} on the 2024 didn’t-vote list`, d.voted && `${d.voted} on the 2024 voted list`].filter(Boolean).join(', ')}.</p>` : ''}
@@ -463,6 +551,7 @@
     { k: 'dots', label: 'Circles: supporters now', sub: 'Size shows the count', glyph: '<span class="g-dot"></span>', needs: () => !!S.ps },
     { k: 'rings', label: 'Rings: 2024 supporters', sub: 'Same size scale as the circles', glyph: '<span class="g-ring"></span>', needs: () => !!S.t },
     { k: 'plan', label: 'GOTV ride plan', sub: 'Priority polls and where they’re sent', glyph: '<span class="g-plan">★</span>', needs: () => !!S.plan },
+    { k: 'castDots', label: 'Voted so far', sub: 'Homes in the participation report', glyph: '<span class="g-cast"></span>', needs: () => !!S.cast },
     { k: 't1dots', label: 'T1 households', sub: 'Rings: door knocked (solid) and called (dashed)', glyph: '<span class="g-t1"></span>', needs: () => !!S.t1 },
     { k: 't2dots', label: 'T2 households', sub: 'Solid: T2 · hollow: said yes · rings: knocked, called', glyph: '<span class="g-t2"></span>', needs: () => !!S.calls },
     { k: 'knockRings', label: 'Door-knock rings', sub: 'Solid ring on T1 and T2 houses that were knocked', glyph: '<span class="g-ring-knock"></span>', needs: () => !!(S.t1 || S.calls) },
@@ -490,6 +579,7 @@
       if (box.dataset.k === 'plan') { if (box.checked) planLayer.addTo(map); else planLayer.remove(); }  // badges follow in refreshTags
       if (box.dataset.k === 'dots' || box.dataset.k === 'rings') drawMarks();
       if (box.dataset.k === 'routes') drawRoutes();
+      if (box.dataset.k === 'castDots') drawCast();
       if (box.dataset.k === 't1dots' || box.dataset.k === 'knockRings' || box.dataset.k === 'callRings') drawT1();
       if (box.dataset.k === 't2dots' || box.dataset.k === 'knockRings' || box.dataset.k === 'callRings') drawT2();
       refreshTags();
@@ -512,6 +602,7 @@
       counts: '<i class="k now"></i>now <i class="k y24"></i>2024 lists',
       plan: 'Gold outline, dashed line to the voting place it’s sent to',
       routes: R.routes.length ? `Route ${R.sel + 1} of ${R.routes.length}, numbered in knocking order` : '',
+      castDots: 'Solid: someone on our supporter lists · hollow: other voters',
       t1dots: 'Hollow: new to us · faded: everyone voted',
       t2dots: 'Solid: T2 · hollow: said yes, not T2 yet · grey: do not contact',
     };
@@ -545,6 +636,7 @@
     if (r?.now != null) bits.push(`${fmt(r.now)} now`);
     if (r?.y24 != null) bits.push(`${fmt(r.y24)} in 2024`);
     if (r?.unknown != null) bits.push(`${pct(r.unknown)} no answer`);
+    if (r?.cast) bits.push(`${fmt(r.cast.n)} voted so far`);
     if (r?.t1) bits.push(`${fmt(r.t1.n)} on T1`);
     if (r?.calls?.t2) bits.push(`${fmt(r.calls.t2)} T2`);
     if (r?.plan) bits.push('GOTV priority');
@@ -559,11 +651,13 @@
     if (said) h += `<p class="story">${said}</p>`;
     if (f) h += `<p class="meta">Focus rank <b>#${f.rank}</b> of ${S.focus.size} · score ${fmt(f.score)}${f.doors ? ` · ${fmt(f.doors)} doors with a 2024 non-voter, about ${f.hours.toFixed(1)} h to knock` : ''}</p>`;
     const cells = [];
+    if (r.cast) cells.push(`<div><b><i class="k cast"></i>${fmt(r.cast.n)}</b><span>voted so far${r.reg ? ` (${pct(r.cast.n / r.reg, 1)} of ${fmt(r.reg)} registered)` : ''}${r.cast.ours ? `; ${fmt(r.cast.ours)} on our supporter lists` : ''}</span></div>`);
     if (r.now != null) cells.push(`<div><b><i class="k now"></i>${fmt(r.now)}</b><span>supporters now${r.supHh != null ? `, in ${fmt(r.supHh)} household${r.supHh === 1 ? '' : 's'}` : ''}</span></div>`);
     if (r.y24 != null) cells.push(`<div><b><i class="k y24"></i>${fmt(r.y24)}</b><span>on the 2024 lists: ${fmt(r.voted)} voted, ${fmt(r.not)} didn’t</span></div>`);
     if (r.unknown != null) cells.push(`<div><b>${pct(r.unknown)}</b><span>no support answer yet (of ${fmt(r.pop)} on file)</span></div>`);
     if (r.phones != null) cells.push(`<div><b>${fmt(r.phones)}</b><span>people with a phone number</span></div>`);
-    if (r.t1) cells.push(`<div><b><i class="k t1"></i>${fmt(r.t1.n)}</b><span>on the T1 list${r.t1.known + r.t1.fresh ? `: ${fmt(r.t1.known)} already on our lists, ${fmt(r.t1.fresh)} new` : ''}${r.t1.voted ? `; ${fmt(r.t1.voted)} voted` : ''}</span></div>`);
+    const t1Voted = r.t1 ? r.t1.voted + (r.t1.cast || 0) : 0;
+    if (r.t1) cells.push(`<div><b><i class="k t1"></i>${fmt(r.t1.n)}</b><span>on the T1 list${r.t1.known + r.t1.fresh ? `: ${fmt(r.t1.known)} already on our lists, ${fmt(r.t1.fresh)} new` : ''}${t1Voted ? `; ${fmt(t1Voted)} voted` : ''}</span></div>`);
     if (r.calls?.homes) cells.push(`<div><b><i class="k t2"></i>${fmt(r.calls.t2)}</b><span>T2 household${r.calls.t2 === 1 ? '' : 's'}${r.calls.t2Voters ? ` (${fmt(r.calls.t2Voters)} voters)` : ''}. Phone bank: ${fmt(r.calls.homes)} called, ${fmt(r.calls.reached)} reached, ${fmt(r.calls.yes)} said yes${r.calls.near ? `; ${fmt(r.calls.near)} more need only a door knock` : ''}${r.calls.dnc ? `; ${fmt(r.calls.dnc)} do not contact` : ''}</span></div>`);
     if (cells.length) h += `<div class="grid">${cells.join('')}</div>`;
     if (r.plan) {
@@ -593,12 +687,16 @@
   // ------------------------------------------------------------------ summary and table
   function renderSummary() {
     const ps = S.ps, t = S.t, h = [];
-    if (ps || t || S.t1 || S.calls) {
+    if (ps || t || S.t1 || S.calls || S.cast) {
       h.push('<div class="duo">');
+      if (S.cast) {
+        const ours = S.castPpl.filter(x => x.ours).length;
+        h.push(`<div><b><i class="k cast"></i>${fmt(S.castPpl.length)}</b><span>voted so far</span><small>${fmt(ours)} on our supporter lists${S.cast.asOf ? ` · report of ${stamp(S.cast.asOf)}` : ''}</small></div>`);
+      }
       if (ps) h.push(`<div><b><i class="k now"></i>${fmt(ps.totals.support)}</b><span>supporters now</span><small>Poll Summary${ps.asOf ? `, ${day(ps.asOf)}` : ''}</small></div>`);
       if (t) h.push(`<div><b><i class="k y24"></i>${fmt(t.people)}</b><span>supporters on the 2024 lists</span><small>${fmt(t.voted)} voted in 2024, ${fmt(t.not)} didn’t</small></div>`);
       if (S.t1) {
-        const ppl = S.t1.people, known = ppl.filter(x => x.on).length, fresh = ppl.filter(x => x.on === 0).length, voted = ppl.filter(x => x.voted).length;
+        const ppl = S.t1.people, known = ppl.filter(x => x.on).length, fresh = ppl.filter(x => x.on === 0).length, voted = ppl.filter(x => x.voted).length + S.t1Cast;
         h.push(`<div><b><i class="k t1"></i>${fmt(ppl.length)}</b><span>on the T1 list</span><small>${known + fresh ? `${fmt(known)} already on our lists, ${fmt(fresh)} new` : 'Loaded in this browser: no overlap check'}${voted ? ` · ${fmt(voted)} voted` : ''}</small></div>`);
       }
       if (S.calls) {
@@ -623,10 +721,14 @@
       }).join('')}</ul>`);
     }
     $('summary').innerHTML = h.join('');
-    const loaded = [ps && `Poll Summary${ps.asOf ? ` (${day(ps.asOf)})` : ''}`, t && '2024 supporter lists', S.t1 && 'T1 list', S.calls && 'phone bank', S.plan && 'GOTV plan'].filter(Boolean);
+    const loaded = [ps && `Poll Summary${ps.asOf ? ` (${day(ps.asOf)})` : ''}`, t && '2024 supporter lists', S.t1 && 'T1 list', S.calls && 'phone bank', S.plan && 'GOTV plan',
+      S.cast && `participation report${S.cast.names.length > 1 ? `s (${S.cast.names.length})` : ''}${S.cast.asOf ? ` to ${stamp(S.cast.asOf)}` : ''}`].filter(Boolean);
     $('loaded').hidden = !loaded.length;
     $('loaded').textContent = loaded.length ? `Loaded: ${loaded.join(' · ')}` : '';
     $('lockBtn').hidden = !(S.builtIn && ENC);
+    $('castClear').hidden = !S.cast;
+    $('who').hidden = !(S.voterNos || S.cast);
+    who.refresh();
   }
   // the focus table: polls ranked by focus score, or the party's plan first
   const planRank = r => r.plan ? 0 : 9;  // the plan's polls are all priority, in no set order
@@ -637,6 +739,7 @@
     { k: 'skipped', label: 'No vote ’24', get: r => r.f.skipped, show: r => `${fmt(r.f.skipped)}${r.f.unchecked ? '*' : ''}`, r: true, when: () => !!S.t,
       title: '2024 supporters still on the voters list who didn’t vote in 2024' },
     { k: 'now', label: 'Now', get: r => r.now ?? -1, show: r => r.now == null ? '—' : fmt(r.now), r: true, when: () => !!S.ps, title: 'Supporters now (Poll Summary)' },
+    { k: 'cast', label: 'Voted', get: r => r.cast?.n ?? -1, show: r => r.cast ? fmt(r.cast.n) : '—', r: true, when: () => !!S.cast, title: 'Voted so far (participation report)' },
     { k: 't1', label: 'T1', get: r => r.t1?.n ?? -1, show: r => r.t1 ? fmt(r.t1.n) : '—', r: true, when: () => !!S.t1, title: 'People on the T1 list' },
     { k: 't2', label: 'T2', get: r => r.calls?.t2 ?? -1, show: r => r.calls ? fmt(r.calls.t2) : '—', r: true, when: () => !!S.calls, title: 'T2 households: knocked, called, said yes, didn’t vote in 2024' },
     { k: 'y24', label: '2024', get: r => r.y24 ?? -1, show: r => r.y24 == null ? '—' : fmt(r.y24), r: true, when: () => !!S.t, title: 'Everyone on the 2024 supporter lists' },
@@ -660,7 +763,7 @@
     }).join('');
     const sum = k => rows.reduce((t, r) => t + (k in r.f ? r.f[k] : r[k] || 0), 0);
     const foot = { rank: '', code: 'All', score: fmt(sum('score')), skipped: fmt(sum('skipped')), now: S.ps ? fmt(sum('now')) : '', y24: S.t ? fmt(sum('y24')) : '',
-      t1: fmt(rows.reduce((t, r) => t + (r.t1?.n || 0), 0)), t2: fmt(rows.reduce((t, r) => t + (r.calls?.t2 || 0), 0)),
+      t1: fmt(rows.reduce((t, r) => t + (r.t1?.n || 0), 0)), t2: fmt(rows.reduce((t, r) => t + (r.calls?.t2 || 0), 0)), cast: fmt(rows.reduce((t, r) => t + (r.cast?.n || 0), 0)),
       doors: fmt(sum('doors')), hours: sum('hours').toFixed(0) };
     $('pollFoot').innerHTML = rows.length ? `<tr>${cols.map(c => `<td class="${c.r ? 'r' : ''}">${foot[c.k]}</td>`).join('')}</tr>` : '';
     renderFocusNote(rows);
@@ -671,6 +774,8 @@
     h.push(`<p class="note"><b>Focus score</b> = 2024 supporters still on the voters list who didn’t vote last time (1 each: the votes a knock can add)
       + supporters found this election (½ each: they need a reminder too, and some are the same people). <b>Doors</b> and <b>Hours</b>: knocking every door
       with a 2024 non-voter, walking at 4.5 km/h, about ${WALK.DOOR_MIN} minutes a door and a minute more for each extra unit in a building.</p>`);
+    if (S.cast) h.push(`<p class="note">Our people the participation report shows have voted are left out of the score, doors and hours. Where a unit has
+      several of our people and only some are in the report, the report can’t say which ones, so only that many are taken off.</p>`);
     if (S.plan) {
       const planned = rows.filter(r => r.plan), n = planned.length, top = [...rows].sort((a, b) => a.f.rank - b.f.rank).slice(0, n);
       const inTop = top.filter(r => r.plan).length, extra = top.filter(r => !r.plan), lower = planned.filter(r => !top.includes(r)).sort((a, b) => a.f.rank - b.f.rank);
@@ -705,7 +810,8 @@
   $('pollBody').addEventListener('keydown', e => { const tr = e.target.closest('tr.go'); if (tr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); goPoll(tr.dataset.key); } });
 
   // ------------------------------------------------------------------ door-knocking routes
-  const knockOpts = () => ({ not: $('kNot').checked, voted: $('kVoted').checked, now: $('kNow').checked, t1: $('kT1').checked, t2: $('kT2').checked, reg: $('kReg').checked });
+  const knockOpts = () => ({ not: $('kNot').checked, voted: $('kVoted').checked, now: $('kNow').checked, t1: $('kT1').checked, t2: $('kT2').checked, reg: $('kReg').checked,
+    cast: !!S.cast && $('kCast').checked });
   function turfs() {
     const out = [];
     for (const g of S.plan?.groups || []) {
@@ -729,6 +835,7 @@
       `<optgroup label="One poll, by focus rank">${single.map(t => `<option value="${t.id}">${esc(t.label)}</option>`).join('')}</optgroup>`;
     sel.value = ts.some(t => t.id === keep) ? keep : ts[0].id;
     $('kReg').closest('label').hidden = !S.hasReg;
+    $('kCast').closest('label').hidden = !S.cast;
     $('kNow').closest('label').hidden = !S.ix;
     $('kT1').closest('label').hidden = !S.t1;
     $('kT2').closest('label').hidden = !S.calls;
@@ -760,15 +867,17 @@
   const hm = min => min < 60 ? `${Math.round(min)} min` : `${Math.floor(min / 60)} h ${String(Math.round(min % 60)).padStart(2, '0')}`;
   const km = m => (m / 1000).toFixed(1) + ' km';
   function whoAt(d, o = R.opts || KNOCK_GOTV) {
-    const free = !o.reg || S.unchecked.has(d.poll), out = [];
-    const not = free ? d.not : d.notReg, voted = free ? d.voted : d.votedReg;
+    const free = !o.reg || S.unchecked.has(d.poll), out = [], g = o.cast ? d.go : d;
+    const not = free ? g.not : g.notReg, voted = free ? g.voted : g.votedReg;
     if (o.not && not) out.push(`${not} didn’t vote ’24${d.phoneNot ? ` (${Math.min(d.phoneNot, not)} with phone)` : ''}`);
     if (o.voted && voted) out.push(`${voted} voted ’24`);
     if (o.now && d.now) out.push(`${d.now} supporter${d.now > 1 ? 's' : ''} now`);
-    if (o.t1 && d.t1Left) out.push(`${d.t1Left} on T1, not voted`);
+    if (o.t1 && g.t1Left) out.push(`${g.t1Left} on T1, not voted`);
     if (o.t2 && d.t2) out.push(`${d.t2} T2 (said yes on the phone)`);
+    if (S.cast && d.castOurs) out.push(`${d.castOurs} voted already${castUnitsOf(d)}`);  // so a knocker can skip them or ask
     return out.join(' · ');
   }
+  const castUnitsOf = d => { const u = [...d.castUnits].sort(byUnit); return u.length ? ` (unit${u.length > 1 ? 's' : ''} ${u.join(', ')})` : ''; };
   function renderRoutes() {
     if (!R.routes.length) {
       $('routeOut').innerHTML = R.turf ? '<p class="note">No doors match these choices in this area.</p>' : '';
@@ -855,11 +964,12 @@
   }
   function csvRoutes(which) {
     const q = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
-    const free = d => !R.opts.reg || S.unchecked.has(d.poll);
-    const rows = [['route', 'stop', 'address', 'units', 'poll', 'did not vote 2024', 'with a phone', 'voted 2024', 'supporters now', 'T1 not voted', 'T2 voters', 'location', 'lat', 'lon']];
+    const free = d => !R.opts.reg || S.unchecked.has(d.poll), g = d => R.opts.cast ? d.go : d;
+    const rows = [['route', 'stop', 'address', 'units', 'poll', 'did not vote 2024', 'with a phone', 'voted 2024', 'supporters now', 'T1 not voted', 'T2 voters', 'voted already',
+      'location', 'lat', 'lon']];
     for (const [rt, i] of pickRoutes(which)) rt.doors.forEach((d, k) => rows.push([i + 1, k + 1, d.civic, [...d.units].join(' '), d.poll,
-      R.opts.not ? (free(d) ? d.not : d.notReg) : '', R.opts.not ? d.phoneNot : '', R.opts.voted ? (free(d) ? d.voted : d.votedReg) : '', R.opts.now ? d.now : '', R.opts.t1 ? d.t1Left : '', R.opts.t2 ? d.t2 : '',
-      d.approx ? 'estimated' : 'address point', d.p[0].toFixed(5), d.p[1].toFixed(5)]));
+      R.opts.not ? (free(d) ? g(d).not : g(d).notReg) : '', R.opts.not ? d.phoneNot : '', R.opts.voted ? (free(d) ? g(d).voted : g(d).votedReg) : '', R.opts.now ? d.now : '',
+      R.opts.t1 ? g(d).t1Left : '', R.opts.t2 ? d.t2 : '', S.cast ? d.castOurs : '', d.approx ? 'estimated' : 'address point', d.p[0].toFixed(5), d.p[1].toFixed(5)]));
     download(new Blob([rows.map(r => r.map(q).join(',')).join('\n')], { type: 'text/csv' }), `${P.code.toLowerCase()}-${R.turf.id}-route${which === 'all' ? 's' : '-' + (+which + 1)}.csv`);
   }
   $('routeForm').addEventListener('submit', e => { e.preventDefault(); planRoutes(); });
@@ -904,7 +1014,7 @@
       routes.forEach((rt, i) => list.push({ t, i, rt, of: routes.length, code: codeFor(t.id, i) }));
     }
     const what = [o.not && '2024 supporters who didn’t vote', o.voted && '2024 supporters who voted', o.now && 'supporters found this election', o.t1 && 'the T1 list (not voted yet)', o.t2 && 'T2 households'].filter(Boolean).join(', ')
-      + (o.reg && S.hasReg ? ' (still on the voters list)' : '');
+      + (o.reg && S.hasReg ? ' (still on the voters list)' : '') + (o.cast ? ', leaving out people who have voted' : '');
     const group = t => S.plan?.groups.find(g => 'g' + g.rank === t.id);
     const streetsOf = rt => [...new Set(rt.doors.map(d => d.civic.replace(/^\d+\s+/, '')))];
     const json = { kind: 'route-book', built: new Date().toISOString().slice(0, 10), pollSummary: S.ps?.asOf || '', knock: what, perRoute: size, maxWalkKm: maxLen / 1000,
@@ -972,6 +1082,7 @@
 
   // ------------------------------------------------------------------ data in: the encrypted built-in data, or files loaded in this tab
   function afterLoad() {
+    S.castPpl = S.cast ? castPeople(S.cast, S.voterNos) : null;
     buildRows();
     buildDoors();
     computeFocus();
@@ -989,6 +1100,9 @@
     S.t1 = d.t1 ? t1FromRows(d.t1) : null;
     S.calls = d.calls ? { ...callsFromRows(d.calls), src: d.calls } : null;
     S.knocked = d.knocked ? knockedFromRows(d.knocked) : null;
+    S.voterNos = d.voterNos ? voterNosFromRows(d.voterNos) : null;
+    S.cast = castSaved();  // a participation report loaded on either map earlier in this tab
+    if (S.cast) S.fill = 'cast';
     S.builtIn = true;
     afterLoad();
   }
@@ -1004,7 +1118,9 @@
         else if (kind === 't1') S.t1 = parseT1(rows, head, f);
         else if (kind === 'calls') { S.calls = parseCalls(rows, head, f); S.on.add('t2dots'); S.sealable = true; }
         else if (kind === 'knocked') { S.knocked = parseKnocked(rows, head, f); S.sealable = true; }
-        else errors.push(`${f.name} isn’t a Poll Summary, Interactions export, 2024 supporter list, T1 list, T2 households or door-knocked houses file.`);
+        else if (kind === 'cast') { S.cast = mergeCast(S.cast, parseCast(rows, head, f)); castSave(S.cast); S.fill = 'cast'; S.on.add('castDots'); }
+        else if (kind === 'voterNos') { S.voterNos = parseVoterNos(rows, head, f); S.sealable = true; }
+        else errors.push(`${f.name} isn’t a Poll Summary, Interactions export, 2024 supporter list, T1 list, T2 households, door-knocked houses, voters file or Elections BC participation report.`);
       } catch (x) {
         errors.push(`${f.name} couldn’t be read: ${x.message}`);
       }
@@ -1019,6 +1135,7 @@
       const extra = {};
       if (S.calls?.src) extra.calls = S.calls.src;
       if (S.knocked?.src) extra.knocked = S.knocked.src;
+      if (S.voterNos?.src) extra.voterNos = S.voterNos.src;  // the extra file is replaced whole, so carry the voter numbers over
       const text = await sealExtra(extra);
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([text], { type: 'text/javascript' }));
@@ -1026,17 +1143,25 @@
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     } catch (x) {
-      $('loadError').textContent = `The T2 file couldn’t be saved: ${x.message}`;
+      $('loadError').textContent = `The file for the team couldn’t be saved: ${x.message}`;
       $('loadError').hidden = false;
     }
   });
   $('files').addEventListener('change', e => { loadFiles([...e.target.files]); e.target.value = ''; });
   $('lockBtn').addEventListener('click', () => {
-    Object.assign(S, { ps: null, ix: null, lists: null, plan: null, t1: null, calls: null, knocked: null, sealable: false, t: null, rows: new Map(), doors: [], focus: new Map(), sel: null, builtIn: false });
+    Object.assign(S, { ps: null, ix: null, lists: null, plan: null, t1: null, calls: null, knocked: null, cast: null, voterNos: null, sealable: false, t: null, rows: new Map(), doors: [],
+      focus: new Map(), sel: null, builtIn: false });
     map.closePopup();
     $('seal').hidden = true;
     afterLoad();
     lock();
+  });
+  $('castClear').addEventListener('click', () => {
+    S.cast = null;
+    castSave(null);
+    if (S.fill === 'cast') S.fill = 'now';
+    map.closePopup();
+    afterLoad();
   });
 
   // ------------------------------------------------------------------ theme, phone sheet, start
@@ -1048,6 +1173,7 @@
     drawRoutes();
     drawT1();
     drawT2();
+    drawCast();
   }
   onTheme(applyTheme);
   const setSheet = sheet(app);
@@ -1061,6 +1187,7 @@
     drawMarks();
     drawT1();
     drawT2();
+    drawCast();
     refreshTags();
   }
   $('eyebrow').textContent = `${P.riding} · ${P.code}`;

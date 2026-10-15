@@ -139,6 +139,9 @@ window.SCC = (() => {
       if (cell(r[0]) === 'Date' && cell(r[1]) === 'Voter') return ['ix', i];
       if (r.some(v => cell(v) === 'Street') && r.some(v => cell(v) === 'Poll') && r.some(v => cell(v) === 'Voter_ID')) return ['list', i];
       if (['Name', 'Address', 'Poll', 'Support'].every(h => r.some(v => cell(v) === h))) return ['t1', i];
+      if (r.some(v => cell(v) === 'Voter No.') && r.some(v => cell(v) === 'Address')) return ['voterNos', i];
+      // the participation report has no header row: district code, voting area and card number, then name and address
+      if (r.length >= 16 && /^[A-Z]{3}$/.test(cell(r[0])) && /^\d{1,3}$/.test(cell(r[1])) && /^\d*$/.test(cell(r[2]))) return ['cast', i];
     }
     return [null, -1];
   }
@@ -294,6 +297,113 @@ window.SCC = (() => {
   // the encrypted payload keeps list rows as [poll, street, has phone]
   // ...and, when the voters-by-last-name file was matched, whether the person is still on the voters list
   const listFromRows = l => ({ kind: l.kind, name: l.name, people: l.rows.map(([poll, street, ph, reg]) => ({ poll: pollKey(poll), street, phone: !!ph, reg: reg == null ? null : !!reg })) });
+  // Elections BC voting participation reports (VotingParticipationReport<district><yyyymmdd>_<hhmmss>.csv): one row per person
+  // who has voted so far, with their district, voting area and card number. Name and address are filled in only for a voter who
+  // registered, or changed their registration, when they voted. A person with no card number is told apart by a short hash of name
+  // and address, so the same person in a later report is counted once. Rows are [poll, card, street, hash, name].
+  const cardKey = v => cell(v).replace(/^0+(?=\d)/, '');  // SheetJS reads card 000476107 as the number 476107
+  const hash = s => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193); return (h >>> 0).toString(36); };
+  const castAsOf = name => { const m = /(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/.exec(name); return m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}` : ''; };
+  const stamp = iso => iso ? new Date(iso).toLocaleString('en-CA', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  function parseCast(rows, head, file) {
+    const out = [];
+    for (const r of rows.slice(head)) {
+      if (!r || !cell(r[0])) continue;
+      if (cell(r[0]) !== P.code) throw new Error(`${file.name} is the participation report for ${cell(r[0])}, not ${P.code}.`);
+      const num = cell(r[10]), civic = [num, ...[6, 7, 8, 9].map(i => cell(r[i]))].filter(Boolean).join(' '), unit = cell(r[12]).replace(/[\s#]/g, '');
+      const card = cardKey(r[2]);
+      out.push([pollKey(r[1]), card, num && cell(r[6]) ? (unit ? `${unit}-${civic}` : civic) : '',
+        card ? '' : hash([3, 5, 6, 10, 12].map(i => cell(r[i]).toUpperCase()).join('|')), [cell(r[3]), cell(r[5])].filter(Boolean).join(', ')]);
+    }
+    if (!out.length) throw new Error(`${file.name} has no voters in it.`);
+    return mergeCast(null, { names: [file.name], asOf: castAsOf(file.name), rows: out });
+  }
+  // reports add up: each day's report, or the same one loaded twice, counts every voter once
+  const castId = r => r[1] || r[3];
+  function mergeCast(a, b) {
+    const seen = new Set(), rows = [];
+    for (const r of [...(a?.rows || []), ...b.rows]) if (!seen.has(castId(r))) { seen.add(castId(r)); rows.push(r); }
+    return { names: [...new Set([...(a?.names || []), ...b.names])], asOf: [a?.asOf || '', b.asOf].sort().at(-1), rows };
+  }
+  // the voters file (Voters by Last Name, with voter numbers): our supporters on the voters list, by card number, with name and
+  // address, to match participation reports and to look up whether someone has voted. Phone numbers are dropped as it is read.
+  // Rows are [card, address, last name, first name]
+  const voterNosFromRows = v => ({ name: v.name, src: v, at: new Map(v.rows.map(r => [r[0], r[1]])), people: v.rows });
+  function parseVoterNos(rows, head, file) {
+    const H = rows[head].map(cell), col = n => H.indexOf(n), id = col('Voter No.'), ad = col('Address'), ln = col('Last Name'), fn = col('First Name');
+    const out = rows.slice(head + 1).filter(r => r && cardKey(r[id]) && cell(r[ad]))
+      .map(r => [cardKey(r[id]), cell(r[ad]).replace(/\s+/g, ' '), ln < 0 ? '' : cell(r[ln]), fn < 0 ? '' : cell(r[fn])]);
+    if (!out.length) throw new Error(`${file.name} has no voter numbers in it.`);
+    return voterNosFromRows({ name: file.name, rows: out });
+  }
+  // everyone in the participation report, placed where we'd look for them: a card number on the voters file is one of ours, at
+  // the address our lists have; anyone else at the address the report gives (a new or changed registration), or only by poll
+  const castPeople = (cast, vn) => (cast?.rows || []).map(([poll, card, street]) => {
+    const home = card && vn?.at.get(card);
+    return { poll, ours: !!home, street: home || street };
+  });
+  // a loaded report follows the tab between the two maps (sessionStorage), so it needs no file published; Lock and closing the
+  // tab drop it
+  const CAST_SLOT = 'campaign-map-voted';
+  function castSave(c) {
+    try { if (c) sessionStorage.setItem(CAST_SLOT, JSON.stringify(c)); else sessionStorage.removeItem(CAST_SLOT); } catch (e) { /* storage blocked or full: it stays on this page */ }
+  }
+  function castSaved() {
+    try { const c = JSON.parse(sessionStorage.getItem(CAST_SLOT)); return Array.isArray(c?.rows) ? c : null; } catch (e) { return null; }
+  }
+  // "Has this person voted?" by voter number, address or name, over our supporters on the voters file and everyone a loaded
+  // report names. Someone has voted once any loaded report has them; with no report loaded there is no answer yet (voted: null)
+  const words = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim().split(' ').filter(Boolean);
+  const homes = new Map();  // address as written -> where it is (the voters file repeats addresses)
+  function homeOf(street) {
+    if (!homes.has(street)) {
+      const a = street && listAddress(street);
+      homes.set(street, a ? { key: siteKey(a.civic), unit: a.unit.toUpperCase().replace(/[\s#]/g, ''), text: a.unit ? `${a.unit}-${prettyCivic(a.civic)}` : prettyCivic(a.civic), civic: a.civic } : null);
+    }
+    return homes.get(street);
+  }
+  function whoVoted(query, vn, cast) {
+    const q = query.trim(), digits = q.replace(/[\s-]/g, ''), cards = new Set((cast?.rows || []).map(r => r[1]).filter(Boolean));
+    const renamed = new Map((cast?.rows || []).filter(r => r[1] && r[4]).map(r => [r[1], r[4]]));  // a changed registration can carry a new name
+    const people = (vn?.people || []).map(([card, street, last, first]) => {
+      const name = [last, first].filter(Boolean).join(', '), now = renamed.get(card);
+      return { card, street, name, now: now && words(now).join(' ') !== words(name).join(' ') ? now : '', ours: true, voted: cast ? cards.has(card) : null };
+    });
+    for (const [poll, card, street, , name] of cast?.rows || []) if (!(card && vn?.at.has(card))) people.push({ card, street, name: name || '', now: '', poll, ours: false, voted: true });
+    let hits = [];
+    if (/^\d{5,}$/.test(digits)) hits = people.filter(x => x.card === cardKey(digits));
+    else if (/^\d/.test(q)) {  // an address: everyone at that house, or in that unit when one is given
+      const h = homeOf(q);
+      if (h) hits = people.filter(x => { const g = homeOf(x.street); return g && g.key === h.key && (!h.unit || g.unit === h.unit); });
+    } else if (q.length >= 2) {
+      const ws = words(q);
+      hits = people.filter(x => [x.name, x.now].some(n => { const have = words(n); return have.length && ws.every(w => have.some(v => v.startsWith(w))); }));
+    }
+    const unitOrder = x => homeOf(x.street)?.unit || '';
+    return hits.sort((a, b) => unitOrder(a).localeCompare(unitOrder(b), 'en', { numeric: true }) || a.name.localeCompare(b.name));
+  }
+  // the search box both maps show; data() gives the voters file and the loaded reports, show(person) opens their home on the map
+  function voteSearch(el, data, show) {
+    const MAX = 25;
+    el.innerHTML = `<label for="whoFind">Has someone voted?</label>
+      <input id="whoFind" type="search" placeholder="Name, voter number or address" autocomplete="off" spellcheck="false">
+      <p class="note" id="whoNote" aria-live="polite"></p><ul class="who-list" id="whoList"></ul>`;
+    let shown = [], timer = 0;
+    function run() {
+      const { vn, cast } = data(), q = $('whoFind').value.trim();
+      const all = q ? whoVoted(q, vn, cast) : [];
+      shown = all.slice(0, MAX).map(x => { const h = homeOf(x.street), at = h && locate(h.civic); return { ...x, home: h, p: at?.p || null, poll: x.poll || (at ? String(pollAt(at.p) ?? '') : '') }; });
+      $('whoNote').textContent = !q ? (cast ? 'Type a name, voter number or address.' : 'Load a participation report to see who has voted.')
+        : !all.length ? 'Nobody on our lists or in the reports matches that.'
+        : `${all.length} match${all.length > 1 ? 'es' : ''}${all.length > MAX ? `, showing the first ${MAX}: type more to narrow it` : ''}${cast ? '' : '. No participation report is loaded, so nobody shows as voted yet'}.`;
+      $('whoList').innerHTML = shown.map((x, i) => `<li><button type="button" data-i="${i}"${x.p ? '' : ' disabled'}><span><b>${esc(x.name || `Voter ${x.card}`)}</b>${x.now ? ` <small>now ${esc(x.now)} in the report</small>` : ''}
+        <small>${esc(x.home ? x.home.text : 'no address in the report')}${x.poll ? ` · poll ${esc(x.poll)}` : ''}${x.card ? ` · voter ${esc(x.card)}` : ''}${x.ours ? '' : ' · not on our lists'}</small></span>
+        ${x.voted == null ? '' : x.voted ? '<span class="vote yes">Voted</span>' : '<span class="vote no">Not yet</span>'}</button></li>`).join('');
+    }
+    $('whoFind').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 120); });
+    $('whoList').addEventListener('click', e => { const b = e.target.closest('button[data-i]'), x = b && shown[+b.dataset.i]; if (x?.p) show(x); });
+    return { refresh: run };
+  }
   async function readWorkbook(file) {
     const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
     return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null, blankrows: false });
@@ -353,11 +463,49 @@ window.SCC = (() => {
     try { saved = sessionStorage.getItem(KEY_SLOT); } catch (e) { /* storage blocked */ }
     return saved ? crypto.subtle.importKey('raw', unb64(saved), { name: 'AES-GCM' }, true, ['decrypt']) : null;
   }
+  // ------------------------------------------------------------------ sign-in log
+  // Each time someone unlocks a map with the password, one line goes to the campaign's Firebase database (desk-config.js): the
+  // time (Firebase's clock), which map, a random ID this browser keeps, the browser and device, and the internet address (from
+  // ipify, since a page can't see its own). No campaign data goes with it. The rules (database.rules.json) let the website add
+  // lines but never read them back; they're read in the Firebase console. A log that fails never stops the map opening.
+  const DEVICE_SLOT = 'campaign-map-device';
+  const randomId = () => [...crypto.getRandomValues(new Uint8Array(6))].map(b => b.toString(16).padStart(2, '0')).join('');
+  function deviceId() {
+    try {
+      let id = localStorage.getItem(DEVICE_SLOT);
+      if (!id) { id = randomId(); localStorage.setItem(DEVICE_SLOT, id); }
+      return id;
+    } catch (e) { return 'temp-' + randomId(); }  // a private window or blocked storage: a new ID each time
+  }
+  function deviceInfo() {
+    const ua = navigator.userAgent, touchMac = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;  // iPads say they're Macs
+    const pick = list => { for (const [n, re] of list) { const m = re.exec(ua); if (m) return m[1] ? `${n} ${m[1]}` : n; } return 'unknown'; };
+    const browser = pick([['Edge', /Edg(?:e|A|iOS)?\/(\d+)/], ['Opera', /OPR\/(\d+)/], ['Samsung Internet', /SamsungBrowser\/(\d+)/], ['Firefox', /(?:Firefox|FxiOS)\/(\d+)/],
+      ['Chrome', /(?:Chrome|CriOS)\/(\d+)/], ['Safari', /Version\/(\d+)[\d.]* .*Safari/]]);
+    const os = touchMac ? 'iPadOS' : pick([['iOS', /(?:iPhone|iPad|iPod).*? OS (\d+)/], ['Android', /Android (\d+)/], ['Windows', /Windows NT/], ['ChromeOS', /CrOS/], ['macOS', /Mac OS X/], ['Linux', /Linux/]]);
+    const type = touchMac || /iPad|Tablet/.test(ua) || (/Android/.test(ua) && !/Mobi/.test(ua)) ? 'tablet' : /Mobi|iPhone|iPod/.test(ua) ? 'phone' : 'computer';
+    return { browser, os, type, ua: ua.slice(0, 300) };
+  }
+  async function ipAddress() {
+    for (const host of ['https://api.ipify.org', 'https://api64.ipify.org']) {  // IPv4 first: it names the home or office network
+      try { const r = await fetch(`${host}?format=json`, { cache: 'no-store', signal: AbortSignal.timeout(4000) }); const ip = (await r.json()).ip; if (ip) return String(ip).slice(0, 45); } catch (e) { /* try the next */ }
+    }
+    return '';
+  }
+  async function logSignIn() {
+    const db = window.DESK_DB?.databaseURL;
+    if (!db) return;
+    try {
+      const entry = { at: { '.sv': 'timestamp' }, page: document.title.replace(/^.*?(Campaign|Poll) Map$/i, (m, w) => `${w.toLowerCase()} map`).slice(0, 40), device: deviceId(), ...deviceInfo(), ip: await ipAddress() };
+      await fetch(`${db.replace(/\/$/, '')}/signins.json`, { method: 'POST', body: JSON.stringify(entry), keepalive: true });
+    } catch (e) { /* offline or blocked: the map opens either way */ }
+  }
   // wires the password screen: calls onOpen(payload) once the data is decrypted; returns lock()
   function gate(onOpen) {
     if (!ENC) return () => {};
     function lock() {
       forgetKey();
+      castSave(null);
       $('pw').value = '';
       $('gate').hidden = false;
       $('pw').focus();
@@ -375,6 +523,7 @@ window.SCC = (() => {
       err.hidden = true;
       try {
         await unlockWith(await deriveKey($('pw').value), true);
+        logSignIn();  // only a typed password: a reload or the other map in the same tab isn't a new sign-in
       } catch (x) {
         if (x.name !== 'OperationError') console.error(x);  // a wrong password fails the decrypt; anything else is a bug
         err.textContent = 'That password didn’t work. Check it and try again.';
@@ -455,5 +604,6 @@ window.SCC = (() => {
     normStreet, siteKey, prettyCivic, locate, inside, pollAt,
     CATEGORY, cell, isoDate, sniff, pollKey, parsePollSummary, parseInteractions, listAddress, parseList, listKind, NO_POLL, listFromRows, readWorkbook,
     T1_ON, t1FromRows, parseT1, CALL_FLAGS, callsFromRows, parseCalls, knockedFromRows, parseKnocked,
+    stamp, parseCast, mergeCast, voterNosFromRows, parseVoterNos, castPeople, castSave, castSaved, whoVoted, voteSearch,
     ENC, gate, sealExtra, baseMap, placer, sheet };
 })();

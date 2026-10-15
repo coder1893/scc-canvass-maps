@@ -4,11 +4,12 @@
 (() => {
   const { P, $, fmt, pct, esc, day, reduced, phone, vaName, tok, lean, leanText, chip, RESULT_STEPS, RESULT_LABELS, classOf, sumWays, total, places, runs, polls, pollByKey, partyBars,
     siteKey, prettyCivic, locate, inside, listAddress, sniff, pollKey, parsePollSummary, parseInteractions, parseList, listKind, NO_POLL, listFromRows, readWorkbook,
-    ENC, gate, baseMap, placer, sheet } = SCC;
+    stamp, parseCast, mergeCast, voterNosFromRows, parseVoterNos, castPeople, castSave, castSaved, voteSearch, ENC, gate, baseMap, placer, sheet } = SCC;
   const app = $('app');
 
   // ------------------------------------------------------------------ state
-  const S = { ps: null, ix: null, turnout: null, sites: [], view: 'support', shade: 'result', sel: null, sort: null };
+  const S = { ps: null, ix: null, turnout: null, cast: null, voterNos: null, castBy: null, sites: [], view: 'support', shade: 'result', sel: null, sort: null };
+  const who = voteSearch($('who'), () => ({ vn: S.voterNos, cast: S.cast }), x => showHouse(S.sites.find(s => s.key === x.home.key)));
 
   // ------------------------------------------------------------------ map
   const { map, streetLabels, placeMarkers, styleBase, onTheme } = baseMap('map', [['roads', 300, true], ['mask', 340, true], ['data', 400],
@@ -30,6 +31,7 @@
     { k: 'support', label: 'Supporters found', needs: 'ps' },
     { k: 'unknown', label: 'No answer yet', needs: 'ps' },
     { k: 'skipped', label: 'Didn’t vote in 2024', needs: 'lists' },
+    { k: 'cast', label: 'Voted so far', needs: 'cast' },
   ];
   const ALPHA5 = [0.08, 0.2, 0.34, 0.5, 0.66];
   const STEPS = {
@@ -39,9 +41,11 @@
       title: 'People with no support answer yet', note: 'From the Poll Summary’s “unknown” share. Darker means more people still to reach.' },
     skipped: { color: 'ramp-gotv', breaks: [10, 25, 50, 100], alpha: ALPHA5, get: r => r.not, label: v => fmt(v), quantile: 5, src: 'turnout',
       title: 'Supporters who didn’t vote in 2024', note: 'From the 2024 supporter lists. Darker means more people to remind to vote.' },
+    cast: { color: 'cast', breaks: [0.02, 0.05, 0.1, 0.2, 0.3], alpha: [0.06, 0.16, 0.28, 0.42, 0.56, 0.70], get: r => r.share, label: v => pct(v), src: 'cast',
+      title: 'Voted so far, as a share of registered voters', note: 'From the Elections BC participation report, by the voting area it gives each voter.' },
   };
-  const has = needs => !needs || (needs === 'ps' ? !!S.ps : needs === 'lists' ? !!S.turnout : true);
-  const rowFor = (st, key) => st.src === 'turnout' ? turnoutFor(key) : S.ps && S.ps.rows.get(key);
+  const has = needs => !needs || (needs === 'ps' ? !!S.ps : needs === 'lists' ? !!S.turnout : needs === 'cast' ? !!S.cast : true);
+  const rowFor = (st, key) => st.src === 'turnout' ? turnoutFor(key) : st.src === 'cast' ? castFor(key) : S.ps && S.ps.rows.get(key);
   function setBreaks() {  // quintiles of the loaded polls, rounded, so each shade holds about a fifth of the map
     for (const st of Object.values(STEPS)) {
       if (!st.quantile) continue;
@@ -95,18 +99,20 @@
 
   // ------------------------------------------------------------------ poll tooltip and card
   function pollTip(p) {
-    const r = S.ps && S.ps.rows.get(p.key), t = S.turnout && turnoutFor(p.key);
+    const r = S.ps && S.ps.rows.get(p.key), t = S.turnout && turnoutFor(p.key), c = castFor(p.key);
     const parts = [`<b>Poll ${p.code}</b>`];
     if (p.place) parts.push(`2024: ${leanText(lean(p.place.day))}`);
+    if (c) parts.push(`${fmt(c.n)} voted so far`);
     if (r) parts.push(`${fmt(r.support)} supporters`, `${pct(r.unknown)} no answer yet`);
     if (t) parts.push(`${fmt(t.not)} didn’t vote in 2024`);
     return parts.join(' · ');
   }
   function pollCard(p) {
-    const r = S.ps && S.ps.rows.get(p.key), t = S.turnout && turnoutFor(p.key), pl = p.place;
+    const r = S.ps && S.ps.rows.get(p.key), t = S.turnout && turnoutFor(p.key), c = castFor(p.key), pl = p.place;
     let h = `<div class="pop"><h3>Poll ${p.code}</h3>`;
-    if (r || t) {
+    if (r || t || c) {
       h += '<div class="grid">';
+      if (c) h += `<div><b>${fmt(c.n)}</b><span>voted so far${c.reg ? ` (${pct(c.share, 1)} of ${fmt(c.reg)} registered)` : ''}${c.ours ? `, ${fmt(c.ours)} on our supporter lists` : ''}</span></div>`;
       if (r) h += `<div><b>${fmt(r.support)}</b><span>supporters found (${pct(r.supportPct, 1)} of ${fmt(r.pop)} people on file)</span></div>
         <div><b>${pct(r.unknown)}</b><span>no support answer yet</span></div>`;
       if (t) h += `<div><b>${fmt(t.not)}</b><span>supporters didn’t vote in 2024${t.notPhone ? `, ${fmt(t.notPhone)} with a phone` : ''}</span></div>`;
@@ -178,6 +184,8 @@
       key: [['con', 'Supporter'], ['ring', 'Lawn sign requested']] },
     { k: 'skipped', label: 'Didn’t vote in 2024', needs: 'lists', test: s => s.notVoted > 0, count: s => s.notVoted,
       key: [['con', 'Supporter who didn’t vote in 2024']] },
+    { k: 'cast', label: 'Voted so far', needs: 'cast', test: s => s.cast > 0, count: s => s.cast,
+      key: [['cast', 'Someone on our supporter lists voted'], ['castOther', 'Other voters']] },
     { k: 'oppose', label: 'Other parties', test: s => sumOf(s, OPPOSE) > 0, count: s => sumOf(s, OPPOSE),
       key: [['ndp', 'NDP'], ['grn', 'Green'], ['oth', 'Other party']] },
     { k: 'und', label: 'Undecided', test: s => (s.n.und || 0) > 0, count: s => s.n.und || 0,
@@ -188,6 +196,7 @@
   const viewOf = () => VIEWS.find(v => v.k === S.view && has(v.needs)) || VIEWS[0];
   function kindOf(s) {  // the dot's colour: supporters blue, other parties in their colour, undecided grey, do-not-contact a red ring
     const v = viewOf().k;
+    if (v === 'cast') return s.castOurs ? 'cast' : 'castOther';
     if (v !== 'oppose' && v !== 'und' && (sumOf(s, SUPPORT) || v === 'skipped')) return 'con';
     if (v === 'oppose' || v === 'all') {
       if (s.n.ndp || s.n.ndp_lean) return 'ndp';
@@ -197,7 +206,8 @@
     if (s.n.und) return 'und';
     return s.n.dnc ? 'dnc' : 'con';
   }
-  const dot = k => k === 'ring' ? 'border:2.5px solid var(--sign);background:transparent' : k === 'dnc' ? 'border:2px dashed var(--dnc);background:transparent' : `background:var(--${k})`;
+  const dot = k => k === 'ring' ? 'border:2.5px solid var(--sign);background:transparent' : k === 'dnc' ? 'border:2px dashed var(--dnc);background:transparent'
+    : k === 'castOther' ? 'border:2px solid var(--cast);background:transparent' : `background:var(--${k})`;
   const countFor = s => s.shown ? viewOf().count(s) : 0;
   const radius = s => 4.5 + Math.min(5, Math.sqrt(Math.max(1, countFor(s))) - 1);
 
@@ -227,19 +237,25 @@
     refreshLabels();
   }
   function styleHouse(s, c) {
-    const r = radius(s), col = c[s.kind];
+    const r = radius(s), col = c[s.kind] || c.cast;
     const st = s.kind === 'dnc' ? { fillColor: c.surface, fillOpacity: 1, color: col, weight: 2.2, dashArray: '2 2' }
+      : s.kind === 'castOther' ? { fillColor: c.surface, fillOpacity: 1, color: col, weight: 2.2, dashArray: null }
       : { fillColor: col, fillOpacity: 1, color: c.halo, weight: 1.6, dashArray: null };
     if (s.out) Object.assign(st, { fillOpacity: s.kind === 'dnc' ? 1 : 0.35, color: col, dashArray: '3 2' });
     s.marker.setStyle(st).setRadius(r);
     if (s.ring) s.ring.setStyle({ color: c.sign, weight: 2.4 }).setRadius(r + 3.5);
   }
-  const tokens = () => Object.fromEntries(['fg', 'halo', 'surface', 'sign', 'va', 'con', 'ndp', 'grn', 'oth', 'und', 'dnc', 'ramp-gotv'].map(k => [k, tok(k)]));
+  const tokens = () => Object.fromEntries(['fg', 'halo', 'surface', 'sign', 'va', 'con', 'ndp', 'grn', 'oth', 'und', 'dnc', 'ramp-gotv', 'cast'].map(k => [k, tok(k)]));
 
   function houseCard(s) {
     const line = (k, label, n) => `<li><i class="dot" style="${dot(k)}"></i><span>${label}</span><b class="num">${n}</b></li>`;
     const lines = [];
     const now = (s.n.con || 0) + (s.n.lean || 0), listed = s.voted + s.notVoted, opp = (s.n.ndp || 0) + (s.n.ndp_lean || 0);
+    if (s.cast) lines.push(line(s.castOurs ? 'cast' : 'castOther', 'Voted so far (participation report)', s.cast));
+    if (s.castOurs) {
+      const u = [...s.castUnits].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+      lines.push(`<li class="sub"><i class="dot" style="${dot('cast')}"></i><span>of them on our supporter lists${u.length ? ` (unit${u.length > 1 ? 's' : ''} ${esc(u.join(', '))})` : ''}</span><b class="num">${s.castOurs}</b></li>`);
+    }
     if (now) lines.push(line('con', 'Supporters found this election', now));
     if (listed) lines.push(line('con', 'On the 2024 supporter list', listed));
     if (s.notVoted) lines.push(`<li class="sub"><i class="dot" style="${dot('ramp-gotv')}"></i><span>of them didn’t vote in 2024${s.phoneNV ? ` (${s.phoneNV} with a phone)` : ''}</span><b class="num">${s.notVoted}</b></li>`);
@@ -266,13 +282,19 @@
     const t = S.turnout && S.turnout.byPoll;
     return t && (t.get(key) || t.get(key.replace(/S$/, '')));
   }
+  // voted so far in a poll, by the voting area the participation report gives each voter, against its registered voters
+  function castFor(key) {
+    if (!S.castBy) return null;
+    const c = S.castBy.get(key) || { n: 0, ours: 0 }, reg = S.ps?.rows.get(key)?.reg || pollByKey.get(key)?.reg2024 || 0;
+    return { ...c, reg, share: reg ? c.n / reg : 0 };
+  }
 
   // one site per civic address, from the canvass answers and the turnout lists together
   function composeSites() {
     const sites = new Map();
     const get = (key, civic) => {
       let s = sites.get(key);
-      if (!s) sites.set(key, s = { key, civic, polls: {}, n: {}, units: new Map(), ls: 0, last: '', voted: 0, notVoted: 0, phoneNV: 0, vUnits: new Map() });
+      if (!s) sites.set(key, s = { key, civic, polls: {}, n: {}, units: new Map(), ls: 0, last: '', voted: 0, notVoted: 0, phoneNV: 0, vUnits: new Map(), cast: 0, castOurs: 0, castUnits: new Set() });
       return s;
     };
     for (const seed of S.ix ? S.ix.seeds : []) {
@@ -294,8 +316,20 @@
         if (list.kind === 'voted') { s.voted++; u.voted++; } else { s.notVoted++; u.not++; if (person.phone) s.phoneNV++; }
       }
     }
+    // people who have voted so far, at their home; a voter who lives where we have nobody gets a site of their own
+    S.castBy = S.cast ? new Map() : null;
+    for (const x of castPeople(S.cast, S.voterNos)) {
+      const c = S.castBy.get(x.poll) || { n: 0, ours: 0 };
+      c.n++; c.ours += x.ours;
+      S.castBy.set(x.poll, c);
+      const a = x.street && listAddress(x.street);
+      if (!a) continue;
+      const k = siteKey(a.civic), s = sites.get(k) || Object.assign(get(k, prettyCivic(a.civic)), { castOnly: true });
+      s.cast++;
+      if (x.ours) { s.castOurs++; if (a.unit) s.castUnits.add(a.unit); }
+    }
     for (const s of sites.values()) {
-      if (!s.fromIx) { s.n.sup24 = s.voted + s.notVoted; s.fromList = true; }  // a "Yes" on the 2024 lists, not yet contacted this time
+      if (!s.fromIx && !s.castOnly) { s.n.sup24 = s.voted + s.notVoted; s.fromList = true; }  // a "Yes" on the 2024 lists, not yet contacted this time
       const hit = locate(s.civic);
       if (hit) {
         s.p = hit.p; s.approx = hit.approx;
@@ -331,32 +365,46 @@
   }
   async function loadFiles(files) {
     const errors = [];
+    let cast = false, other = false;
     for (const f of files) {
       try {
         const rows = await readWorkbook(f);
         const [kind, head] = sniff(rows);
+        if (kind === 'cast') { S.cast = mergeCast(S.cast, parseCast(rows, head, f)); castSave(S.cast); cast = true; continue; }
+        other = true;
         if (kind === 'ps') S.ps = parsePollSummary(rows, head, f);
         else if (kind === 'ix') S.ix = parseInteractions(rows, head, f);
         else if (kind === 'list') { const l = parseList(rows, head, f, listKind(f.name)); S.lists = { ...S.lists, [l.kind]: l }; }
-        else errors.push(`${f.name} isn’t a Poll Summary, Interactions export or voting list. The Poll Summary starts with a “Poll, City, Reg Voters” header row; the Interactions export has a “Date, Voter, Poll, Address” table; a voting list has “Phone, Poll, Street, Voter_ID” columns.`);
+        else if (kind === 'voterNos') S.voterNos = parseVoterNos(rows, head, f);
+        else errors.push(`${f.name} isn’t a Poll Summary, Interactions export, voting list or Elections BC participation report. The Poll Summary starts with a “Poll, City, Reg Voters” header row; the Interactions export has a “Date, Voter, Poll, Address” table; a voting list has “Phone, Poll, Street, Voter_ID” columns; the participation report is the VotingParticipationReport .csv.`);
       } catch (e) {
         errors.push(`${f.name} couldn’t be read: ${e.message}`);
       }
     }
     $('loadError').hidden = !errors.length;
     $('loadError').textContent = errors.join(' ');
-    S.builtIn = false;
+    if (other) S.builtIn = false;  // a participation report adds to the team's data rather than replacing it
+    if (cast) { S.shade = 'cast'; S.view = 'cast'; }
     afterLoad();
     if (S.sites.length && !S.ps) selectTab('homes');
   }
   $('files').addEventListener('change', e => { loadFiles([...e.target.files]); e.target.value = ''; });
   $('clearData').addEventListener('click', () => {
-    S.ps = null; S.ix = null; S.lists = null; S.turnout = null; S.sites = []; S.sort = null; S.builtIn = false; S.view = 'support';
+    S.ps = null; S.ix = null; S.lists = null; S.turnout = null; S.cast = null; S.voterNos = null; S.castBy = null; S.sites = []; S.sort = null; S.builtIn = false; S.view = 'support';
+    castSave(null);
     houseLayer.clearLayers();
     S.shade = 'result';
     map.closePopup();
     renderAll();
     if (ENC) lock();
+  });
+  $('castClear').addEventListener('click', () => {
+    S.cast = null;
+    castSave(null);
+    if (S.shade === 'cast') S.shade = 'result';
+    if (S.view === 'cast') S.view = 'support';
+    map.closePopup();
+    afterLoad();
   });
 
   // ------------------------------------------------------------------ built-in data, decrypted with the team password (core.js)
@@ -365,6 +413,9 @@
     if (ps && ps[0] === 'ps') S.ps = parsePollSummary(d.ps.rows, ps[1], { name: d.ps.name });
     if (ix && ix[0] === 'ix') S.ix = parseInteractions(d.ix.rows, ix[1], { name: d.ix.name });
     for (const l of d.lists || []) S.lists = { ...S.lists, [l.kind]: listFromRows(l) };
+    S.voterNos = d.voterNos ? voterNosFromRows(d.voterNos) : null;
+    S.cast = castSaved();  // a participation report loaded on either map earlier in this tab
+    if (S.cast) S.shade = 'cast';
     S.builtIn = true;
     afterLoad();
   }
@@ -384,7 +435,9 @@
   // ------------------------------------------------------------------ overview
   function renderOverview() {
     const ps = S.ps, ix = S.ix, tv = S.turnout;
-    const loaded = [ps && `poll summary${ps.asOf ? ` (${day(ps.asOf)})` : ''}`, ix && `canvass ${day(ix.earliest)} – ${day(ix.latest)}`, tv && '2024 voting lists'].filter(Boolean);
+    const cast = S.cast;
+    const loaded = [ps && `poll summary${ps.asOf ? ` (${day(ps.asOf)})` : ''}`, ix && `canvass ${day(ix.earliest)} – ${day(ix.latest)}`, tv && '2024 voting lists',
+      cast && `participation report${cast.names.length > 1 ? `s (${cast.names.length})` : ''}${cast.asOf ? ` to ${stamp(cast.asOf)}` : ''}`].filter(Boolean);
     $('loader').classList.toggle('done', loaded.length > 0);
     $('loaded').hidden = !loaded.length;
     $('loaded').textContent = loaded.length ? `Loaded: ${loaded.join(' · ')}` : '';
@@ -392,9 +445,18 @@
     $('chooseLabel').classList.toggle('primary', !loaded.length);
     $('clearData').hidden = !loaded.length;
     $('clearData').textContent = S.builtIn && ENC ? 'Lock' : 'Clear';
+    $('castClear').hidden = !cast;
+    $('who').hidden = !(S.voterNos || cast);
+    who.refresh();
 
     const win = total.ndp + 1;
     let h = '';
+    if (cast) {
+      const all = [...S.castBy.values()], n = all.reduce((t, c) => t + c.n, 0), ours = all.reduce((t, c) => t + c.ours, 0);
+      h += `<h2>Voted so far</h2><div class="goal"><p class="hero"><b>${fmt(n)}</b> people have voted</p>
+        <p>${fmt(ours)} of them are on our supporter lists. From the Elections BC participation report${cast.asOf ? ` of ${stamp(cast.asOf)}` : ''}; load each new report as it comes.</p></div>
+        ${S.sites.length ? '<div class="actions"><button type="button" class="btn" data-go="cast">Map who has voted</button></div>' : ''}`;
+    }
     if (ps || tv) {
       h += '<h2>This election</h2>';
       if (ps) {
@@ -420,7 +482,7 @@
     const b = e.target.closest('[data-go]');
     if (!b) return;
     S.view = b.dataset.go;
-    S.shade = b.dataset.go === 'skipped' ? 'skipped' : S.ps ? 'support' : 'result';
+    S.shade = b.dataset.go === 'skipped' || b.dataset.go === 'cast' ? b.dataset.go : S.ps ? 'support' : 'result';
     renderShade();
     restylePolls();
     updateHouses();
@@ -436,10 +498,11 @@
     { k: 'support', label: 'Supporters', get: r => r.support, show: r => fmt(r.support), r: true, when: () => !!S.ps },
     { k: 'unknown', label: 'No answer', get: r => r.unknown, show: r => pct(r.unknown), r: true, when: () => !!S.ps },
     { k: 'skipped', label: 'Didn’t vote ’24', get: r => r.skipped, show: r => fmt(r.skipped), r: true, when: () => !!S.turnout },
+    { k: 'cast', label: 'Voted', get: r => r.cast, show: r => fmt(r.cast), r: true, when: () => !!S.cast },
   ];
   function pollRows() {
     const row = (key, label, sortCode, lean_, r, reg, onMap) => ({ key, label, sortCode, lean: lean_, reg, onMap,
-      support: r?.support ?? 0, unknown: r?.unknown ?? 0, skipped: turnoutFor(key)?.not ?? 0 });
+      support: r?.support ?? 0, unknown: r?.unknown ?? 0, skipped: turnoutFor(key)?.not ?? 0, cast: castFor(key)?.n ?? 0 });
     const rows = polls.map(p => { const r = S.ps?.rows.get(p.key); return row(p.key, String(p.code), p.code, p.place ? lean(p.place.day) : null, r, r ? r.reg : p.reg2024, true); });
     if (S.ps) for (const r of S.ps.rows.values()) {
       if (r.onMap || !r.reg) continue;  // site-based polls (care homes, apartments) have no area on the map
@@ -457,6 +520,7 @@
     const notes = ['<b>2024</b> is the result at the poll’s 2024 voting place.'];
     if (S.ps) notes.push('<b>Supporters</b> and <b>No answer</b> (share of people on file with no support answer) come from the Poll Summary.');
     if (S.turnout) notes.push('<b>Didn’t vote ’24</b> counts supporters on the 2024 didn’t-vote list.');
+    if (S.cast) notes.push('<b>Voted</b> counts everyone in the participation report so far.');
     notes.push('Click a column to sort, or a poll to see it on the map.');
     $('pollsNote').innerHTML = notes.join(' ');
   }
@@ -497,7 +561,8 @@
     if (!any) return;
     renderViews();
     $('addrs').innerHTML = S.sites.filter(s => s.p).map(s => `<option value="${esc(s.civic)}"></option>`).join('');
-    const placed = S.sites.filter(s => s.p), out = placed.filter(s => s.out), missing = S.sites.filter(s => !s.p);
+    const ours = S.sites.filter(s => !s.castOnly);  // the address check is about our lists, not every voter in the report
+    const placed = ours.filter(s => s.p), out = placed.filter(s => s.out), missing = ours.filter(s => !s.p);
     const moved = placed.filter(s => !s.out && s.va && String(s.va) !== s.poll && !/S$/.test(s.poll) && s.poll !== '999'), approx = placed.filter(s => s.approx);
     const list = (arr, meta, go) => `<ul class="addr-list">${arr.map((s, i) => go
       ? `<li><button type="button" data-list="${go}" data-i="${i}">${esc(s.civic)} <span class="meta">${meta(s)}</span></button></li>`
@@ -517,7 +582,7 @@
   $('check').addEventListener('click', e => { const b = e.target.closest('button[data-list]'); if (b) showHouse(S.checkLists[b.dataset.list][+b.dataset.i]); });
   function showHouse(s) {
     if (!s || !s.p) return;
-    if (!s.shown) { S.view = 'all'; updateHouses(); }
+    if (!s.shown) { S.view = Object.values(s.n).some(Boolean) ? 'all' : 'cast'; updateHouses(); }  // a voter not on our lists shows only among voters
     map.setView(s.p, 18, { animate: !reduced });
     s.marker.openPopup();
     if (phone()) setSheet(false);
@@ -531,9 +596,9 @@
   $('downloadCsv').addEventListener('click', () => {
     const q = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
     const rows = [['address', 'units', 'poll', 'supporters', 'other parties', 'undecided', 'do not contact', 'did not vote in 2024', 'with a phone',
-      'lawn signs', 'last contact', 'location', 'lat', 'lon']];
+      'lawn signs', 'last contact', 'voted so far', 'of them on our lists', 'location', 'lat', 'lon']];
     S.sites.filter(s => s.shown).forEach(s => rows.push([s.civic, [...new Set([...s.units.keys(), ...s.vUnits.keys()])].filter(Boolean).join(' '),
-      s.va || s.poll, sumOf(s, SUPPORT), sumOf(s, OPPOSE), s.n.und || 0, s.n.dnc || 0, s.notVoted, s.phoneNV, s.ls, s.last,
+      s.va || s.poll, sumOf(s, SUPPORT), sumOf(s, OPPOSE), s.n.und || 0, s.n.dnc || 0, s.notVoted, s.phoneNV, s.ls, s.last, S.cast ? s.cast : '', S.cast ? s.castOurs : '',
       s.approx ? 'estimated' : 'address point', s.p[0].toFixed(5), s.p[1].toFixed(5)]));
     const url = URL.createObjectURL(new Blob([rows.map(r => r.map(q).join(',')).join('\n')], { type: 'text/csv' }));
     const a = Object.assign(document.createElement('a'), { href: url, download: `${P.code.toLowerCase()}-${viewOf().k}-households.csv` });
