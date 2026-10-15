@@ -39,6 +39,7 @@
       <button type="button" role="tab" id="tab-overview" aria-controls="pane-overview" aria-selected="true">Overview</button>
       <button type="button" role="tab" id="tab-polls" aria-controls="pane-polls" aria-selected="false" tabindex="-1">Polls</button>
       <button type="button" role="tab" id="tab-homes" aria-controls="pane-homes" aria-selected="false" tabindex="-1">Households</button>
+      <button type="button" role="tab" id="tab-voted" aria-controls="pane-voted" aria-selected="false" tabindex="-1">Voted</button>
     </div>
     <div class="body" id="panelBody">
       <section class="pane" id="pane-overview" role="tabpanel" aria-labelledby="tab-overview">
@@ -57,7 +58,6 @@
           </div>
           <p class="error" id="loadError" role="alert" hidden></p>
         </div>
-        <div class="search voted-search" id="who" hidden></div>
         <div id="canvass"></div>
         <div id="result2024"></div>
       </section>
@@ -91,6 +91,7 @@
           <details class="check" id="check"></details>
         </div>
       </section>
+      <section class="pane" id="pane-voted" role="tabpanel" aria-labelledby="tab-voted" hidden></section>
     </div>
   </aside>
   <div class="mapwrap">

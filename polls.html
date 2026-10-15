@@ -39,10 +39,10 @@
       <button type="button" role="tab" id="tab-map" aria-controls="pane-map" aria-selected="true">Map</button>
       <button type="button" role="tab" id="tab-focus" aria-controls="pane-focus" aria-selected="false" tabindex="-1">Focus</button>
       <button type="button" role="tab" id="tab-routes" aria-controls="pane-routes" aria-selected="false" tabindex="-1">Routes</button>
+      <button type="button" role="tab" id="tab-voted" aria-controls="pane-voted" aria-selected="false" tabindex="-1">Voted</button>
     </div>
     <div class="body" id="panelBody">
       <section class="pane" id="pane-map" role="tabpanel" aria-labelledby="tab-map">
-        <div class="search voted-search" id="who" hidden></div>
         <div id="summary" aria-live="polite"></div>
         <div class="layers-panel">
           <h2>Show on the map</h2>
@@ -112,6 +112,7 @@
           <div id="bookOut" aria-live="polite"></div>
         </section>
       </section>
+      <section class="pane" id="pane-voted" role="tabpanel" aria-labelledby="tab-voted" hidden></section>
     </div>
   </aside>
   <div class="mapwrap">

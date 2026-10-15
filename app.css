@@ -127,6 +127,7 @@ td:first-child { white-space: normal; }
 .minibar { display: inline-block; width: 26px; height: 7px; border-radius: 2px; background: color-mix(in srgb, var(--fg) 8%, transparent); vertical-align: middle; margin-right: 6px; overflow: hidden; }
 .minibar span { display: block; height: 100%; background: var(--ramp-find); }
 .minibar.gotv span { background: var(--ramp-gotv); }
+.minibar.cast span { background: var(--cast); }
 .split { height: 6px; border-radius: 2px; background: color-mix(in srgb, var(--ramp-gotv) 25%, transparent); overflow: hidden; }
 .split span { display: block; height: 100%; background: var(--ramp-gotv); }
 .vote-block { display: grid; gap: 2px; }
@@ -154,7 +155,12 @@ td:first-child { white-space: normal; }
 .search input { padding: 8px 10px; border-radius: 6px; border: 1px solid var(--rule); background: var(--surface); min-width: 0; }
 .search input:focus-visible { outline: 2px solid var(--con); outline-offset: 0; }
 /* "has someone voted?" search, on both maps */
-.voted-search { margin: 14px 0 18px; }
+/* the Voted tab, on both maps */
+.vote-tab { display: grid; gap: 24px; }
+.vote-from { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: -10px; }
+.vote-from .note { margin: 0; flex: 1 1 220px; }
+.voted-search h2 { margin: 0 0 2px; }
+.voted-search input + label { margin-top: 4px; }
 .voted-search .note { margin: 0; }
 #canvass .actions + h2 { margin-top: 24px; }
 .who-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }

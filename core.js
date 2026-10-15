@@ -351,9 +351,12 @@ window.SCC = (() => {
   function castSaved() {
     try { const c = JSON.parse(sessionStorage.getItem(CAST_SLOT)); return Array.isArray(c?.rows) ? c : null; } catch (e) { return null; }
   }
-  // "Has this person voted?" by voter number, address or name, over our supporters on the voters file and everyone a loaded
-  // report names. Someone has voted once any loaded report has them; with no report loaded there is no answer yet (voted: null)
+  // ------------------------------------------------------------------ the Voted tab, on both maps
+  // How many have voted, overall, of our supporters and by poll, and "has someone voted?" by name and address, over our supporters
+  // on the voters file and the new or changed registrations a report names. Voter numbers only match the report to our people;
+  // they are never shown or searched.
   const words = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim().split(' ').filter(Boolean);
+  const startsAll = (want, text) => { const have = words(text); return have.length > 0 && want.every(w => have.some(v => v.startsWith(w))); };
   const homes = new Map();  // address as written -> where it is (the voters file repeats addresses)
   function homeOf(street) {
     if (!homes.has(street)) {
@@ -362,47 +365,95 @@ window.SCC = (() => {
     }
     return homes.get(street);
   }
-  function whoVoted(query, vn, cast) {
-    const q = query.trim(), digits = q.replace(/[\s-]/g, ''), cards = new Set((cast?.rows || []).map(r => r[1]).filter(Boolean));
+  function whoVoted({ name = '', address = '' }, vn, cast) {
+    const cards = new Set((cast?.rows || []).map(r => r[1]).filter(Boolean));
     const renamed = new Map((cast?.rows || []).filter(r => r[1] && r[4]).map(r => [r[1], r[4]]));  // a changed registration can carry a new name
     const people = (vn?.people || []).map(([card, street, last, first]) => {
-      const name = [last, first].filter(Boolean).join(', '), now = renamed.get(card);
-      return { card, street, name, now: now && words(now).join(' ') !== words(name).join(' ') ? now : '', ours: true, voted: cast ? cards.has(card) : null };
+      const full = [last, first].filter(Boolean).join(', '), now = renamed.get(card);
+      return { street, name: full, now: now && words(now).join(' ') !== words(full).join(' ') ? now : '', ours: true, voted: cards.has(card) };
     });
-    for (const [poll, card, street, , name] of cast?.rows || []) if (!(card && vn?.at.has(card))) people.push({ card, street, name: name || '', now: '', poll, ours: false, voted: true });
-    let hits = [];
-    if (/^\d{5,}$/.test(digits)) hits = people.filter(x => x.card === cardKey(digits));
-    else if (/^\d/.test(q)) {  // an address: everyone at that house, or in that unit when one is given
-      const h = homeOf(q);
-      if (h) hits = people.filter(x => { const g = homeOf(x.street); return g && g.key === h.key && (!h.unit || g.unit === h.unit); });
-    } else if (q.length >= 2) {
-      const ws = words(q);
-      hits = people.filter(x => [x.name, x.now].some(n => { const have = words(n); return have.length && ws.every(w => have.some(v => v.startsWith(w))); }));
+    for (const [poll, card, street, , full] of cast?.rows || []) if (full && !(card && vn?.at.has(card))) people.push({ street, name: full, now: '', poll, ours: false, voted: true });
+    const want = words(name), addr = address.trim();
+    if (want.join('').length < 2 && words(addr).join('').length < 2) return [];
+    let hits = want.length ? people.filter(x => startsAll(want, x.name) || startsAll(want, x.now)) : people;
+    if (addr) {  // a house number and street finds that house (or unit); anything else matches the words of the address
+      const h = /^\d/.test(addr) && homeOf(addr), house = h ? hits.filter(x => { const g = homeOf(x.street); return g && g.key === h.key && (!h.unit || g.unit === h.unit); }) : [];
+      hits = house.length ? house : hits.filter(x => startsAll(words(addr), homeOf(x.street)?.text));
     }
     const unitOrder = x => homeOf(x.street)?.unit || '';
     return hits.sort((a, b) => unitOrder(a).localeCompare(unitOrder(b), 'en', { numeric: true }) || a.name.localeCompare(b.name));
   }
-  // the search box both maps show; data() gives the voters file and the loaded reports, show(person) opens their home on the map
-  function voteSearch(el, data, show) {
+  // data() gives { vn: voters file, cast: loaded reports, polls: [{ key, label, reg }] }; showHome(person) and showPoll(key) put
+  // them on the map
+  function voteTab(el, data, showHome, showPoll) {
     const MAX = 25;
-    el.innerHTML = `<label for="whoFind">Has someone voted?</label>
-      <input id="whoFind" type="search" placeholder="Name, voter number or address" autocomplete="off" spellcheck="false">
-      <p class="note" id="whoNote" aria-live="polite"></p><ul class="who-list" id="whoList"></ul>`;
-    let shown = [], timer = 0;
-    function run() {
-      const { vn, cast } = data(), q = $('whoFind').value.trim();
-      const all = q ? whoVoted(q, vn, cast) : [];
+    el.innerHTML = `<div class="empty" id="voteEmpty"><h2>Who has voted</h2>
+        <p>Load the Elections BC participation report (.csv) to see how many people have voted, poll by poll, and to look someone up.</p>
+        <label class="btn primary" for="files">Load a participation report</label></div>
+      <div class="vote-tab" id="voteBody" hidden>
+        <div class="duo" id="voteTotals"></div>
+        <div class="vote-from"><p class="note" id="voteFrom"></p><label class="btn" for="files">Load a newer report</label></div>
+        <div class="search voted-search"><h2>Has someone voted?</h2>
+          <label for="voteName">Name</label><input id="voteName" type="search" placeholder="First and last name" autocomplete="off" spellcheck="false">
+          <label for="voteAddr">Address</label><input id="voteAddr" type="search" placeholder="e.g. 13450 104 Ave, or 1203-13450 104 Ave" autocomplete="off" spellcheck="false">
+          <p class="note" id="whoNote" aria-live="polite"></p><ul class="who-list" id="whoList"></ul></div>
+        <div><h2>By poll</h2><div class="table-wrap"><table class="polls"><thead><tr id="voteHead"></tr></thead><tbody id="votePolls"></tbody></table></div>
+          <p class="note">Voters are counted in the voting area the report gives them. <b>Ours</b> is how many of them are on our supporter list. Click a poll to see it on the map.</p></div>
+      </div>`;
+    let shown = [], rows = [], sort = { k: 'label', dir: 1 }, timer = 0;
+    const COLS = [['label', 'Poll'], ['reg', 'Registered'], ['n', 'Voted'], ['share', 'Turnout'], ['ours', 'Ours']];
+    function search() {
+      const { vn, cast } = data(), name = $('voteName').value, address = $('voteAddr').value;
+      const all = cast ? whoVoted({ name, address }, vn, cast) : [];
       shown = all.slice(0, MAX).map(x => { const h = homeOf(x.street), at = h && locate(h.civic); return { ...x, home: h, p: at?.p || null, poll: x.poll || (at ? String(pollAt(at.p) ?? '') : '') }; });
-      $('whoNote').textContent = !q ? (cast ? 'Type a name, voter number or address.' : 'Load a participation report to see who has voted.')
-        : !all.length ? 'Nobody on our lists or in the reports matches that.'
-        : `${all.length} match${all.length > 1 ? 'es' : ''}${all.length > MAX ? `, showing the first ${MAX}: type more to narrow it` : ''}${cast ? '' : '. No participation report is loaded, so nobody shows as voted yet'}.`;
-      $('whoList').innerHTML = shown.map((x, i) => `<li><button type="button" data-i="${i}"${x.p ? '' : ' disabled'}><span><b>${esc(x.name || `Voter ${x.card}`)}</b>${x.now ? ` <small>now ${esc(x.now)} in the report</small>` : ''}
-        <small>${esc(x.home ? x.home.text : 'no address in the report')}${x.poll ? ` · poll ${esc(x.poll)}` : ''}${x.card ? ` · voter ${esc(x.card)}` : ''}${x.ours ? '' : ' · not on our lists'}</small></span>
-        ${x.voted == null ? '' : x.voted ? '<span class="vote yes">Voted</span>' : '<span class="vote no">Not yet</span>'}</button></li>`).join('');
+      $('whoNote').textContent = !(name.trim() || address.trim()) ? 'Type a first and last name, an address, or both.'
+        : !all.length ? 'Nobody on our list or in the reports matches that.'
+        : `${all.length} match${all.length > 1 ? 'es' : ''}${all.length > MAX ? `, showing the first ${MAX}: type more to narrow it` : ''}.`;
+      $('whoList').innerHTML = shown.map((x, i) => `<li><button type="button" data-i="${i}"${x.p ? '' : ' disabled'}><span><b>${esc(x.name)}</b>${x.now ? ` <small>now ${esc(x.now)} in the report</small>` : ''}
+        <small>${esc(x.home ? x.home.text : 'no address in the report')}${x.poll ? ` · poll ${esc(x.poll)}` : ''}${x.ours ? '' : ' · not on our list'}</small></span>
+        ${x.voted ? '<span class="vote yes">Voted</span>' : '<span class="vote no">Not yet</span>'}</button></li>`).join('');
     }
-    $('whoFind').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 120); });
-    $('whoList').addEventListener('click', e => { const b = e.target.closest('button[data-i]'), x = b && shown[+b.dataset.i]; if (x?.p) show(x); });
-    return { refresh: run };
+    function table() {
+      const get = (r, k) => k === 'label' ? (parseInt(r.label, 10) || 9999) + (/\D/.test(r.label) ? 0.5 : 0) : r[k];
+      rows.sort((a, b) => (get(a, sort.k) - get(b, sort.k)) * sort.dir || get(a, 'label') - get(b, 'label'));
+      const top = Math.max(...rows.map(r => r.share), 0.0001);
+      $('voteHead').innerHTML = COLS.map(([k, label]) => `<th class="${k === 'label' ? '' : 'r'}"${k === sort.k ? ` aria-sort="${sort.dir > 0 ? 'ascending' : 'descending'}"` : ''}><button type="button" data-k="${k}">${label}</button></th>`).join('');
+      $('votePolls').innerHTML = rows.map(r => `<tr class="go" tabindex="0" data-key="${esc(r.key)}"><td>${esc(r.label)}</td><td class="r">${r.reg ? fmt(r.reg) : '—'}</td><td class="r">${fmt(r.n)}</td>
+        <td class="r">${r.reg ? `<span class="minibar cast"><span style="width:${(r.share / top) * 100}%"></span></span>${pct(r.share, 1)}` : '—'}</td><td class="r">${fmt(r.ours)}</td></tr>`).join('');
+    }
+    function refresh() {
+      const { vn, cast, polls } = data();
+      $('voteEmpty').hidden = !!cast;
+      $('voteBody').hidden = !cast;
+      if (!cast) return;
+      const by = new Map(polls.map(p => [p.key, { ...p, n: 0, ours: 0 }]));
+      let ours = 0;
+      for (const [poll, card] of cast.rows) {
+        const own = !!(card && vn?.at.has(card));
+        let r = by.get(poll);
+        if (!r) by.set(poll, r = { key: poll, label: poll, reg: 0, n: 0, ours: 0 });
+        r.n++; r.ours += own; ours += own;
+      }
+      rows = [...by.values()].filter(r => r.reg || r.n).map(r => ({ ...r, share: r.reg ? r.n / r.reg : 0 }));
+      const reg = rows.reduce((t, r) => t + r.reg, 0), n = cast.rows.length, onList = vn?.people.length || 0;
+      $('voteTotals').innerHTML = `<div><b><i class="k cast"></i>${fmt(n)}</b><span>people have voted</span><small>${reg ? `${pct(n / reg, 1)} of ${fmt(reg)} registered voters` : ''}</small></div>
+        <div><b>${fmt(ours)}</b><span>of our supporters have voted</span><small>${onList ? `${pct(ours / onList, 1)} of the ${fmt(onList)} on our supporter list` : ''}</small></div>`;
+      const from = `From the Elections BC participation report${cast.names.length > 1 ? `s (${cast.names.length} loaded)` : ''}${cast.asOf ? `, up to ${stamp(cast.asOf)}` : ''}`;
+      $('voteFrom').textContent = `${from}${from.endsWith('.') ? '' : '.'} Load each new report as it comes: they add up.`;  // "p.m." already ends in a dot
+      table();
+      search();
+    }
+    for (const id of ['voteName', 'voteAddr']) $(id).addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 120); });
+    $('whoList').addEventListener('click', e => { const b = e.target.closest('button[data-i]'), x = b && shown[+b.dataset.i]; if (x?.p) showHome(x); });
+    $('voteHead').addEventListener('click', e => {
+      const b = e.target.closest('button[data-k]');
+      if (!b) return;
+      sort = sort.k === b.dataset.k ? { k: sort.k, dir: -sort.dir } : { k: b.dataset.k, dir: b.dataset.k === 'label' ? 1 : -1 };
+      table();
+    });
+    $('votePolls').addEventListener('click', e => { const tr = e.target.closest('tr[data-key]'); if (tr) showPoll(tr.dataset.key); });
+    $('votePolls').addEventListener('keydown', e => { const tr = e.target.closest('tr[data-key]'); if (tr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); showPoll(tr.dataset.key); } });
+    return { refresh };
   }
   async function readWorkbook(file) {
     const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
@@ -604,6 +655,6 @@ window.SCC = (() => {
     normStreet, siteKey, prettyCivic, locate, inside, pollAt,
     CATEGORY, cell, isoDate, sniff, pollKey, parsePollSummary, parseInteractions, listAddress, parseList, listKind, NO_POLL, listFromRows, readWorkbook,
     T1_ON, t1FromRows, parseT1, CALL_FLAGS, callsFromRows, parseCalls, knockedFromRows, parseKnocked,
-    stamp, parseCast, mergeCast, voterNosFromRows, parseVoterNos, castPeople, castSave, castSaved, whoVoted, voteSearch,
+    stamp, parseCast, mergeCast, voterNosFromRows, parseVoterNos, castPeople, castSave, castSaved, whoVoted, voteTab,
     ENC, gate, sealExtra, baseMap, placer, sheet };
 })();
