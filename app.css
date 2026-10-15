@@ -6,7 +6,7 @@
   /* party identity: validated (OKLab, all pairs, protan/deutan) against the map surface */
   --con: #2459c2; --ndp: #f2852f; --grn: #16753a; --oth: #cc4793;
   --und: #868d97; --dnc: #b3261e; --sign: #c99a06; --even: #9aa0a8;
-  --ramp-contact: #3d4654; --ramp-find: #6a4fd0; --ramp-gotv: #0e7490; --y24: #0e7490; --t1: #1f7a3e; --t2: #7c3aed; --missed: #e8590c;
+  --ramp-contact: #3d4654; --ramp-find: #6a4fd0; --ramp-gotv: #0e7490; --y24: #0e7490; --t1: #1f7a3e; --t2: #7c3aed; --missed: #e8590c; --cast: #701a75;
   --font-display: "Archivo", "Arial Black", system-ui, sans-serif;
   --font-ui: "IBM Plex Sans Condensed", "Arial Narrow", "Roboto Condensed", system-ui, sans-serif;
   color-scheme: light;
@@ -17,7 +17,7 @@
     --road: #353c46; --road-major: #525b69; --road-label: #8f98a4; --edge: #e8ebef; --va: #6b7380; --mask: #0d1014; --halo: #10141a;
     --con: #5a88ec; --ndp: #d6782b; --grn: #1b7a42; --oth: #c95599;
     --und: #8d96a3; --dnc: #ff6b5e; --sign: #e8b923; --even: #707782;
-    --ramp-contact: #c9d0da; --ramp-find: #a28ff2; --ramp-gotv: #22b8cf; --y24: #22b8cf; --t1: #3fb26a; --t2: #b794f6; --missed: #ff8f3f;
+    --ramp-contact: #c9d0da; --ramp-find: #a28ff2; --ramp-gotv: #22b8cf; --y24: #22b8cf; --t1: #3fb26a; --t2: #b794f6; --missed: #ff8f3f; --cast: #d946ef;
     color-scheme: dark;
   }
 }
@@ -26,7 +26,7 @@
   --road: #353c46; --road-major: #525b69; --road-label: #8f98a4; --edge: #e8ebef; --va: #6b7380; --mask: #0d1014; --halo: #10141a;
   --con: #5a88ec; --ndp: #d6782b; --grn: #1b7a42; --oth: #c95599;
   --und: #8d96a3; --dnc: #ff6b5e; --sign: #e8b923; --even: #707782;
-  --ramp-contact: #c9d0da; --ramp-find: #a28ff2; --ramp-gotv: #22b8cf; --y24: #22b8cf; --t1: #3fb26a; --t2: #b794f6; --missed: #ff8f3f;
+  --ramp-contact: #c9d0da; --ramp-find: #a28ff2; --ramp-gotv: #22b8cf; --y24: #22b8cf; --t1: #3fb26a; --t2: #b794f6; --missed: #ff8f3f; --cast: #d946ef;
   color-scheme: dark;
 }
 
@@ -153,6 +153,20 @@ td:first-child { white-space: normal; }
 .search label { font-size: 11.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 .search input { padding: 8px 10px; border-radius: 6px; border: 1px solid var(--rule); background: var(--surface); min-width: 0; }
 .search input:focus-visible { outline: 2px solid var(--con); outline-offset: 0; }
+/* "has someone voted?" search, on both maps */
+.voted-search { margin: 14px 0 18px; }
+.voted-search .note { margin: 0; }
+#canvass .actions + h2 { margin-top: 24px; }
+.who-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+.who-list button { all: unset; box-sizing: border-box; width: 100%; display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 6px 8px; margin-inline: -8px; border-radius: 6px; cursor: pointer; }
+.who-list button:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.who-list button:focus-visible { outline: 2px solid var(--con); }
+.who-list button:disabled { cursor: default; background: none; }
+.who-list b { font-weight: 600; }
+.who-list small { display: block; color: var(--muted); font-size: 12px; }
+.vote { font-size: 12px; font-weight: 700; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+.vote.yes { background: color-mix(in srgb, var(--cast) 22%, transparent); color: var(--fg); }
+.vote.no { border: 1px solid var(--rule); color: var(--muted); }
 details { margin-top: 6px; border-top: 1px dashed var(--rule); padding-top: 6px; }
 details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .addr-list { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 1px; font-size: 13px; }
@@ -284,6 +298,8 @@ fieldset.switches legend .aside { font-weight: 500; color: var(--muted); margin-
 .k.y24 { border: 2.5px solid var(--y24); background: transparent; }
 .k.t1 { background: var(--t1); border-radius: 2px; }
 .k.t2 { background: var(--t2); border-radius: 2px; }
+.k.cast { background: var(--cast); }
+.g-cast { display: inline-block; width: 11px; height: 11px; border-radius: 50%; background: var(--cast); border: 1px solid var(--halo); box-sizing: border-box; }
 .g-t2 { display: inline-block; width: 11px; height: 11px; border-radius: 50%; background: var(--t2); border: 1px solid var(--halo); box-sizing: border-box; }
 .pop ul.calls { margin: 6px 0; padding-left: 18px; }
 .pop ul.calls li { margin: 2px 0; }
@@ -380,7 +396,7 @@ td .g-plan { width: 17px; height: 17px; font-size: 10.5px; }
 .seg button:focus-visible { outline: 2px solid var(--con); }
 table.focus th, table.focus td { padding-inline: 5px; }
 table.focus tr.band td { padding-top: 14px; font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--rule); }
-#pollsNote { display: grid; gap: 10px; }
+div#pollsNote { display: grid; gap: 10px; }  /* the poll map's notes block; on the campaign map it's one paragraph */
 .verdict { display: grid; gap: 4px; padding: 10px 12px; border-radius: 8px; font-size: 13px;
   background: color-mix(in srgb, var(--sign) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--sign) 45%, var(--rule)); }
 .linkish { all: unset; cursor: pointer; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
