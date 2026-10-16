@@ -7,20 +7,20 @@
   const { P, $, fmt, pct, esc, day, reduced, phone, tok, lean, chip, RESULT_STEPS, RESULT_LABELS, classOf, runs, polls, pollByKey,
     partyBars, normStreet, siteKey, prettyCivic, locate, pollAt, listAddress, sniff, pollKey, parsePollSummary, parseInteractions, parseList,
     listKind, NO_POLL, listFromRows, readWorkbook, T1_ON, t1FromRows, parseT1, callsFromRows, parseCalls, knockedFromRows, parseKnocked,
-    stamp, parseCast, mergeCast, voterNosFromRows, parseVoterNos, castPeople, castSave, castSaved, voteSearch, ENC, gate, sealExtra, baseMap, placer, sheet } = SCC;
+    stamp, parseCast, mergeCast, voterNosFromRows, parseVoterNos, castPeople, castSave, castSaved, voteTab, ENC, gate, sealExtra, baseMap, placer, sheet } = SCC;
   const app = $('app');
 
   const S = { ps: null, ix: null, lists: null, plan: null, t1: null, calls: null, knocked: null, cast: null, voterNos: null, castPpl: null, t: null, rows: new Map(), doors: [],
     unchecked: new Set(), focus: new Map(), fill: 'now', on: new Set(['numbers', 'counts', 'plan', 'streets', 'routes', 'castDots', 't1dots', 't2dots', 'knockRings', 'callRings']),
     sel: null, sort: null, builtIn: false };
   const R = { routes: [], sel: 0, turf: null };  // the door-knocking routes on the map
-  const who = voteSearch($('who'), () => ({ vn: S.voterNos, cast: S.cast }), x => {
+  const voted = voteTab($('pane-voted'), () => ({ vn: S.voterNos, cast: S.cast, polls: [...S.rows.values()].map(r => ({ key: r.key, label: r.label, reg: r.reg })) }), x => {
     const d = S.doors.find(d => d.key === x.home.key);
     if (!d) return;
     if (phone()) setSheet(false);
     map.setView(d.p, 18, { animate: !reduced });
     openHouse(d);
-  });
+  }, key => goPoll(key));
 
   // ------------------------------------------------------------------ map
   const { map, streetLabels, placeMarkers, styleBase, onTheme } = baseMap('map', [['roads', 300, true], ['mask', 340, true], ['data', 400],
@@ -727,8 +727,6 @@
     $('loaded').textContent = loaded.length ? `Loaded: ${loaded.join(' · ')}` : '';
     $('lockBtn').hidden = !(S.builtIn && ENC);
     $('castClear').hidden = !S.cast;
-    $('who').hidden = !(S.voterNos || S.cast);
-    who.refresh();
   }
   // the focus table: polls ranked by focus score, or the party's plan first
   const planRank = r => r.plan ? 0 : 9;  // the plan's polls are all priority, in no set order
@@ -1050,7 +1048,7 @@
   });
 
   // ------------------------------------------------------------------ tabs
-  const TABS = ['map', 'focus', 'routes'];
+  const TABS = ['map', 'focus', 'routes', 'voted'];
   function selectTab(name) {
     TABS.forEach(t => {
       const tab = $('tab-' + t), on = t === name;
@@ -1183,6 +1181,7 @@
     renderTable();
     renderRouteForm();
     renderLegend();
+    voted.refresh();
     restylePolls();
     drawMarks();
     drawT1();

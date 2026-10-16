@@ -4,12 +4,13 @@
 (() => {
   const { P, $, fmt, pct, esc, day, reduced, phone, vaName, tok, lean, leanText, chip, RESULT_STEPS, RESULT_LABELS, classOf, sumWays, total, places, runs, polls, pollByKey, partyBars,
     siteKey, prettyCivic, locate, inside, listAddress, sniff, pollKey, parsePollSummary, parseInteractions, parseList, listKind, NO_POLL, listFromRows, readWorkbook,
-    stamp, parseCast, mergeCast, voterNosFromRows, parseVoterNos, castPeople, castSave, castSaved, voteSearch, ENC, gate, baseMap, placer, sheet } = SCC;
+    stamp, parseCast, mergeCast, voterNosFromRows, parseVoterNos, castPeople, castSave, castSaved, voteTab, ENC, gate, baseMap, placer, sheet } = SCC;
   const app = $('app');
 
   // ------------------------------------------------------------------ state
   const S = { ps: null, ix: null, turnout: null, cast: null, voterNos: null, castBy: null, sites: [], view: 'support', shade: 'result', sel: null, sort: null };
-  const who = voteSearch($('who'), () => ({ vn: S.voterNos, cast: S.cast }), x => showHouse(S.sites.find(s => s.key === x.home.key)));
+  const voted = voteTab($('pane-voted'), () => ({ vn: S.voterNos, cast: S.cast, polls: pollRows().map(r => ({ key: r.key, label: r.label, reg: r.reg })) }),
+    x => showHouse(S.sites.find(s => s.key === x.home.key)), key => goPoll(key));
 
   // ------------------------------------------------------------------ map
   const { map, streetLabels, placeMarkers, styleBase, onTheme } = baseMap('map', [['roads', 300, true], ['mask', 340, true], ['data', 400],
@@ -446,8 +447,6 @@
     $('clearData').hidden = !loaded.length;
     $('clearData').textContent = S.builtIn && ENC ? 'Lock' : 'Clear';
     $('castClear').hidden = !cast;
-    $('who').hidden = !(S.voterNos || cast);
-    who.refresh();
 
     const win = total.ndp + 1;
     let h = '';
@@ -609,7 +608,7 @@
   });
 
   // ------------------------------------------------------------------ tabs and phone sheet
-  const TABS = ['overview', 'polls', 'homes'];
+  const TABS = ['overview', 'polls', 'homes', 'voted'];
   function selectTab(name) {
     TABS.forEach(t => {
       const tab = $('tab-' + t), sel = t === name;
@@ -642,6 +641,7 @@
     renderOverview();
     renderPolls();
     renderHomes();
+    voted.refresh();
     restylePolls();
     refreshLabels();
   }
