@@ -366,6 +366,7 @@ fieldset.switches legend .aside { font-weight: 500; color: var(--muted); margin-
 tfoot td { font-weight: 700; border-top: 1px solid var(--rule); border-bottom: 0; }
 td .g-plan { width: 17px; height: 17px; font-size: 10.5px; }
 .loader .note { font-size: 12px; }
+.seal { display: grid; gap: 8px; justify-items: start; }
 
 /* poll map: labels and plan markers */
 .poll-tag, .plan-badge, .plan-place { pointer-events: none; }
