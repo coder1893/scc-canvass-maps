@@ -234,22 +234,23 @@ window.SCC = (() => {
   }
   // a newer export replaces the canvass answers on the map. Answers of a kind it doesn't carry (lawn sign requests, when it was
   // filtered to Support) are kept, given to a voter the new file has at the same address so nobody is counted twice there.
-  // base and fresh are { name, rows }; returns the rows to keep, or throws if fresh is older than what's on the map
+  // base and fresh are { name, rows }; returns the rows to keep, and the date of the newest answer on the map when it's later
+  // than the newest in fresh (of the same kinds), so the page can say so
   function mergeInteractions(base, fresh) {
     const rows = stripInteractions(fresh.rows, sniff(fresh.rows)[1]), got = rows.slice(1);
     if (!got.length) throw new Error(`${fresh.name} has no canvass answers in it.`);
     const head = base && sniff(base.rows);
-    if (!head || head[0] !== 'ix') return { rows, kept: 0 };
+    if (!head || head[0] !== 'ix') return { rows, kept: 0, newer: '' };
     const old = base.rows.slice(head[1] + 1).filter(r => r && r[0] != null && cell(r[6]));
-    const last = list => list.reduce((t, r) => { const d = isoDate(r[0]); return d > t ? d : t; }, '');
-    if (last(got) < last(old)) throw new Error(`${fresh.name} ends on ${day(last(got))}, before the canvass answers already on the map (to ${day(last(old))}). Load the newest Interactions export.`);
     const kinds = new Set(got.map(fieldOf)), at = new Map();
+    const last = list => list.reduce((t, r) => { const d = kinds.has(fieldOf(r)) && isoDate(r[0]); return d && /^\d{4}-/.test(d) && d > t ? d : t; }, '');
+    const newer = last(old) > last(got) ? last(old) : '';
     for (const r of got) if (!at.has(r[4])) at.set(r[4], r[1]);
     const kept = old.filter(r => !kinds.has(fieldOf(r))).map(r => {
       const addr = cell(r[4]).replace(/\s+/g, ' ');
       return [isoDate(r[0]), at.get(addr) || cell(r[1]), '', pollKey(r[3]), addr, '', cell(r[6])];
     });
-    return { rows: [...rows, ...kept], kept: kept.length };
+    return { rows: [...rows, ...kept], kept: kept.length, newer };
   }
 
   // supporter turnout lists ("Yes, voted" / "Yes, not voted"): one row per supporter with poll and street address
