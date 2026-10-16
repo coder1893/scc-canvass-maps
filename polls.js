@@ -5,7 +5,7 @@
 // colouring is one choice at a time.
 (() => {
   const { P, $, fmt, pct, esc, day, reduced, phone, tok, lean, chip, RESULT_STEPS, RESULT_LABELS, classOf, runs, polls, pollByKey,
-    partyBars, normStreet, siteKey, prettyCivic, locate, pollAt, listAddress, sniff, pollKey, parsePollSummary, parseInteractions, parseList,
+    partyBars, normStreet, siteKey, prettyCivic, locate, pollAt, listAddress, sniff, pollKey, parsePollSummary, parseInteractions, mergeInteractions, parseList,
     listKind, NO_POLL, listFromRows, readWorkbook, T1_ON, t1FromRows, parseT1, callsFromRows, parseCalls, knockedFromRows, parseKnocked,
     stamp, parseCast, mergeCast, voterNosFromRows, parseVoterNos, castPeople, castSave, castSaved, voteTab, ENC, gate, sealExtra, baseMap, placer, sheet } = SCC;
   const app = $('app');
@@ -721,7 +721,7 @@
       }).join('')}</ul>`);
     }
     $('summary').innerHTML = h.join('');
-    const loaded = [ps && `Poll Summary${ps.asOf ? ` (${day(ps.asOf)})` : ''}`, t && '2024 supporter lists', S.t1 && 'T1 list', S.calls && 'phone bank', S.plan && 'GOTV plan',
+    const loaded = [ps && `Poll Summary${ps.asOf ? ` (${day(ps.asOf)})` : ''}`, S.ix && `canvass ${day(S.ix.earliest)} – ${day(S.ix.latest)}`, t && '2024 supporter lists', S.t1 && 'T1 list', S.calls && 'phone bank', S.plan && 'GOTV plan',
       S.cast && `participation report${S.cast.names.length > 1 ? `s (${S.cast.names.length})` : ''}${S.cast.asOf ? ` to ${stamp(S.cast.asOf)}` : ''}`].filter(Boolean);
     $('loaded').hidden = !loaded.length;
     $('loaded').textContent = loaded.length ? `Loaded: ${loaded.join(' · ')}` : '';
@@ -1093,6 +1093,8 @@
     const ps = d.ps && sniff(d.ps.rows), ix = d.ix && sniff(d.ix.rows);
     if (ps && ps[0] === 'ps') S.ps = parsePollSummary(d.ps.rows, ps[1], { name: d.ps.name });
     if (ix && ix[0] === 'ix') S.ix = parseInteractions(d.ix.rows, ix[1], { name: d.ix.name });
+    S.ixBase = d.ix || null;  // a newer Interactions export loaded later replaces these answers
+    S.ixSrc = d.fromExtra?.includes('ix') ? d.ix : null;  // answers locked in from the browser before: saved again with the rest
     for (const l of d.lists || []) S.lists = { ...S.lists, [l.kind]: listFromRows(l) };
     S.plan = d.plan || null;
     S.t1 = d.t1 ? t1FromRows(d.t1) : null;
@@ -1112,7 +1114,14 @@
         const [kind, head] = sniff(rows);
         if (kind === 'ps') S.ps = parsePollSummary(rows, head, f);
         else if (kind === 'list') { const l = parseList(rows, head, f, listKind(f.name)); S.lists = { ...S.lists, [l.kind]: l }; }
-        else if (kind === 'ix') S.ix = parseInteractions(rows, head, f);
+        else if (kind === 'ix') {
+          const { rows: merged, kept } = mergeInteractions(S.ixBase, { name: f.name, rows });
+          S.ixSrc = { name: f.name, rows: merged };
+          S.ix = parseInteractions(merged, 0, f);
+          S.sealable = true;
+          $('sealIx').textContent = `Canvass answers to save: ${fmt(S.ix.count - kept)} from ${f.name}${kept ? `, and ${fmt(kept)} earlier lawn sign or other answers it doesn’t have` : ''}, ${day(S.ix.earliest)} to ${day(S.ix.latest)}.`;
+          $('sealIx').hidden = false;
+        }
         else if (kind === 't1') S.t1 = parseT1(rows, head, f);
         else if (kind === 'calls') { S.calls = parseCalls(rows, head, f); S.on.add('t2dots'); S.sealable = true; }
         else if (kind === 'knocked') { S.knocked = parseKnocked(rows, head, f); S.sealable = true; }
@@ -1134,6 +1143,7 @@
       if (S.calls?.src) extra.calls = S.calls.src;
       if (S.knocked?.src) extra.knocked = S.knocked.src;
       if (S.voterNos?.src) extra.voterNos = S.voterNos.src;  // the extra file is replaced whole, so carry the voter numbers over
+      if (S.ixSrc) extra.ix = S.ixSrc;  // ...and the canvass answers, when they're newer than the built-in ones
       const text = await sealExtra(extra);
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([text], { type: 'text/javascript' }));
@@ -1147,10 +1157,11 @@
   });
   $('files').addEventListener('change', e => { loadFiles([...e.target.files]); e.target.value = ''; });
   $('lockBtn').addEventListener('click', () => {
-    Object.assign(S, { ps: null, ix: null, lists: null, plan: null, t1: null, calls: null, knocked: null, cast: null, voterNos: null, sealable: false, t: null, rows: new Map(), doors: [],
+    Object.assign(S, { ps: null, ix: null, ixBase: null, ixSrc: null, lists: null, plan: null, t1: null, calls: null, knocked: null, cast: null, voterNos: null, sealable: false, t: null, rows: new Map(), doors: [],
       focus: new Map(), sel: null, builtIn: false });
     map.closePopup();
     $('seal').hidden = true;
+    $('sealIx').hidden = true;
     afterLoad();
     lock();
   });

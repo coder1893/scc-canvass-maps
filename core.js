@@ -181,7 +181,7 @@ window.SCC = (() => {
 
   // canvass answers by household, from the Interactions export (one row per answer)
   const CATEGORY = { 'Conservative': 'con', 'Conservative-Leaning': 'lean', 'NDP': 'ndp', 'NDP-Leaning': 'ndp_lean', 'Green': 'grn',
-    'Independent': 'oth', 'Other': 'oth', 'Undecided': 'und', 'Will Not Say': 'und', 'Unknown': 'und', 'Do Not Contact': 'dnc' };
+    'Independent': 'oth', 'Other': 'oth', 'Other-Leaning': 'oth', 'Undecided': 'und', 'Will Not Say': 'und', 'Unknown': 'und', 'Do Not Contact': 'dnc' };
   function parseInteractions(rows, head, file) {
     const voters = new Map();
     let count = 0, latest = '', earliest = '';
@@ -217,6 +217,39 @@ window.SCC = (() => {
       if (v.last > s.last) s.last = v.last;
     }
     return { name: file.name, count, latest, earliest, voters: voters.size, seeds: [...sites.values()].filter(s => Object.keys(s.n).length) };
+  }
+  // an Interactions export to lock into the maps, with names, voter numbers, sources and canvassers taken out: each voter becomes
+  // '#' and a short hash of their voter number (or, with none, of name and address), the same in every export. Rows are
+  // [date, voter, '', poll, address, '', field] under the export's header, so parseInteractions reads them as it reads the export
+  const IX_HEAD = ['Date', 'Voter', 'Voter ID', 'Poll', 'Address', 'Source', 'Field'];
+  const fieldOf = r => cell(r[6]).split(' ')[0];
+  function stripInteractions(rows, head) {
+    const id = rows[head].map(cell).indexOf('Voter ID');
+    const voter = r => {
+      const v = cell(r[1]), no = id < 0 ? '' : cardKey(r[id]);
+      return v.startsWith('#') ? v : '#' + hash(no ? 'id:' + no : 'nm:' + words(v).join(' ') + '|' + words(r[4]).join(' '));
+    };
+    return [IX_HEAD, ...rows.slice(head + 1).filter(r => r && r[0] != null && cell(r[6]))
+      .map(r => [isoDate(r[0]), voter(r), '', pollKey(r[3]), cell(r[4]).replace(/\s+/g, ' '), '', cell(r[6])])];
+  }
+  // a newer export replaces the canvass answers on the map. Answers of a kind it doesn't carry (lawn sign requests, when it was
+  // filtered to Support) are kept, given to a voter the new file has at the same address so nobody is counted twice there.
+  // base and fresh are { name, rows }; returns the rows to keep, or throws if fresh is older than what's on the map
+  function mergeInteractions(base, fresh) {
+    const rows = stripInteractions(fresh.rows, sniff(fresh.rows)[1]), got = rows.slice(1);
+    if (!got.length) throw new Error(`${fresh.name} has no canvass answers in it.`);
+    const head = base && sniff(base.rows);
+    if (!head || head[0] !== 'ix') return { rows, kept: 0 };
+    const old = base.rows.slice(head[1] + 1).filter(r => r && r[0] != null && cell(r[6]));
+    const last = list => list.reduce((t, r) => { const d = isoDate(r[0]); return d > t ? d : t; }, '');
+    if (last(got) < last(old)) throw new Error(`${fresh.name} ends on ${day(last(got))}, before the canvass answers already on the map (to ${day(last(old))}). Load the newest Interactions export.`);
+    const kinds = new Set(got.map(fieldOf)), at = new Map();
+    for (const r of got) if (!at.has(r[4])) at.set(r[4], r[1]);
+    const kept = old.filter(r => !kinds.has(fieldOf(r))).map(r => {
+      const addr = cell(r[4]).replace(/\s+/g, ' ');
+      return [isoDate(r[0]), at.get(addr) || cell(r[1]), '', pollKey(r[3]), addr, '', cell(r[6])];
+    });
+    return { rows: [...rows, ...kept], kept: kept.length };
   }
 
   // supporter turnout lists ("Yes, voted" / "Yes, not voted"): one row per supporter with poll and street address
@@ -488,7 +521,7 @@ window.SCC = (() => {
     const payload = await decryptBox(ENC, key);
     const extra = window.CAMPAIGN_EXTRA;
     if (extra?.data) {
-      try { Object.assign(payload, await decryptBox(extra, key)); } catch (x) { console.warn('campaign.extra.enc.js could not be opened', x); }
+      try { const x = await decryptBox(extra, key); Object.assign(payload, x, { fromExtra: Object.keys(x) }); } catch (x) { console.warn('campaign.extra.enc.js could not be opened', x); }
     }
     return payload;
   }
@@ -653,7 +686,7 @@ window.SCC = (() => {
   return { P, $, fmt, pct, esc, pad, day, reduced, phone, vaName, tok,
     PARTIES, valid, lean, leanText, leanVar, chip, RESULT_STEPS, RESULT_LABELS, classOf, sumWays, total, ridingConShare, places, placeOf, runs, polls, pollByKey, partyBars,
     normStreet, siteKey, prettyCivic, locate, inside, pollAt,
-    CATEGORY, cell, isoDate, sniff, pollKey, parsePollSummary, parseInteractions, listAddress, parseList, listKind, NO_POLL, listFromRows, readWorkbook,
+    CATEGORY, cell, isoDate, sniff, pollKey, parsePollSummary, parseInteractions, mergeInteractions, listAddress, parseList, listKind, NO_POLL, listFromRows, readWorkbook,
     T1_ON, t1FromRows, parseT1, CALL_FLAGS, callsFromRows, parseCalls, knockedFromRows, parseKnocked,
     stamp, parseCast, mergeCast, voterNosFromRows, parseVoterNos, castPeople, castSave, castSaved, whoVoted, voteTab,
     ENC, gate, sealExtra, baseMap, placer, sheet };
