@@ -12,7 +12,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=IBM+Plex+Sans+Condensed:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="vendor/leaflet.css">
-<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="app.css?v=20261016">
 </head>
 <body>
 <div class="gate" id="gate" hidden>
@@ -53,7 +53,7 @@
           <p class="loaded" id="loaded" hidden></p>
           <div class="load-row">
             <label class="btn" for="files" id="chooseLabel">Load newer files</label>
-            <input id="files" type="file" accept=".xlsx,.xls,.csv" multiple>
+            <input id="files" type="file" accept=".xlsx,.xls,.csv,text/csv,text/comma-separated-values,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple>
             <button type="button" class="btn quiet" id="lockBtn">Lock</button>
             <button type="button" class="btn quiet" id="castClear" hidden>Clear the voted list</button>
           </div>
@@ -125,13 +125,13 @@
 <script src="vendor/leaflet.js"></script>
 <script src="vendor/xlsx.full.min.js"></script>
 <script src="vendor/jspdf.umd.min.js"></script>
-<script src="data/public.js"></script>
-<script src="data/campaign.enc.js"></script>
-<script src="data/campaign.extra.enc.js"></script>
-<script src="desk-config.js"></script>
-<script src="core.js"></script>
-<script src="routes.js"></script>
-<script src="export.js"></script>
-<script src="polls.js"></script>
+<script src="data/public.js?v=20261016"></script>
+<script src="data/campaign.enc.js?v=20261016"></script>
+<script src="data/campaign.extra.enc.js?v=20261016"></script>
+<script src="desk-config.js?v=20261016"></script>
+<script src="core.js?v=20261016"></script>
+<script src="routes.js?v=20261016"></script>
+<script src="export.js?v=20261016"></script>
+<script src="polls.js?v=20261016"></script>
 </body>
 </html>

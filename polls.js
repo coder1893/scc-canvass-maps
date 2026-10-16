@@ -1115,11 +1115,11 @@
         if (kind === 'ps') S.ps = parsePollSummary(rows, head, f);
         else if (kind === 'list') { const l = parseList(rows, head, f, listKind(f.name)); S.lists = { ...S.lists, [l.kind]: l }; }
         else if (kind === 'ix') {
-          const { rows: merged, kept } = mergeInteractions(S.ixBase, { name: f.name, rows });
+          const { rows: merged, kept, newer } = mergeInteractions(S.ixBase, { name: f.name, rows });
           S.ixSrc = { name: f.name, rows: merged };
           S.ix = parseInteractions(merged, 0, f);
           S.sealable = true;
-          $('sealIx').textContent = `Canvass answers to save: ${fmt(S.ix.count - kept)} from ${f.name}${kept ? `, and ${fmt(kept)} earlier lawn sign or other answers it doesn’t have` : ''}, ${day(S.ix.earliest)} to ${day(S.ix.latest)}.`;
+          $('sealIx').textContent = `Canvass answers to save: ${fmt(S.ix.count - kept)} from ${f.name}${kept ? `, and ${fmt(kept)} earlier lawn sign or other answers it doesn’t have` : ''}, ${day(S.ix.earliest)} to ${day(S.ix.latest)}.${newer ? ` The answers on the map went to ${day(newer)}, later than this file: check it’s the newest export before saving.` : ''}`;
           $('sealIx').hidden = false;
         }
         else if (kind === 't1') S.t1 = parseT1(rows, head, f);
