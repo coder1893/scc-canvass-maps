@@ -43,6 +43,11 @@
     </div>
     <div class="body" id="panelBody">
       <section class="pane" id="pane-map" role="tabpanel" aria-labelledby="tab-map">
+        <div class="addr-find" id="addrFind" hidden>
+          <label for="addrQ">Find an address</label>
+          <input id="addrQ" type="search" autocomplete="off" placeholder="e.g. 13418 98B Ave" aria-controls="addrHits">
+          <ul id="addrHits" role="listbox" hidden></ul>
+        </div>
         <div id="summary" aria-live="polite"></div>
         <div class="layers-panel">
           <h2>Show on the map</h2>
@@ -61,7 +66,7 @@
           <p class="note">A Poll Summary, Interactions export, 2024 list, T1 list, T2 households or door-knocked houses file you load opens in this browser only and is never uploaded. Closing the tab clears it.</p>
           <p class="error" id="loadError" role="alert" hidden></p>
           <div class="seal" id="seal" hidden>
-            <p class="note">To build a newer Interactions export, or the T2, door-knock or voters files, into the map for the whole team, save it locked with the team password and send the saved file to Claude to publish. An Interactions export is saved without names, voter numbers or canvassers.</p>
+            <p class="note">To build a newer Interactions export, the participation reports (who has voted), or the T2, door-knock or voters files, into the map for the whole team, save it locked with the team password and send the saved file to Claude to publish. An Interactions export is saved without names, voter numbers or canvassers.</p>
             <p class="note" id="sealIx" hidden></p>
             <button type="button" class="btn" id="sealBtn">Save for the team</button>
           </div>

@@ -500,3 +500,14 @@ fieldset.checks input { accent-color: var(--fg); }
   .legend .keys { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+.addr-find { position: relative; display: grid; gap: 4px; margin-bottom: 14px; }
+.addr-find label { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.addr-find input { font: inherit; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--rule); background: var(--surface); color: var(--fg); }
+.addr-find input:focus { outline: 2px solid var(--con); outline-offset: -1px; }
+.addr-find ul { position: absolute; z-index: 20; top: 100%; left: 0; right: 0; margin: 2px 0 0; padding: 4px; list-style: none; border-radius: 6px;
+  background: var(--surface); border: 1px solid var(--rule); box-shadow: 0 6px 18px rgb(0 0 0 / .14); }
+.addr-find li { display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 4px; cursor: pointer; }
+.addr-find li:hover { background: color-mix(in srgb, var(--fg) 7%, transparent); }
+.addr-find li small { color: var(--muted); }
+.addr-find li.none { cursor: default; color: var(--muted); }

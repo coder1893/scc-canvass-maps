@@ -399,11 +399,13 @@
     renderAll();
     if (ENC) lock();
   });
-  $('castClear').addEventListener('click', () => {
-    S.cast = null;
+  $('castClear').addEventListener('click', () => {  // drops reports loaded in this tab; the team's saved ones stay
+    S.cast = S.castBuiltIn || null;
     castSave(null);
-    if (S.shade === 'cast') S.shade = 'result';
-    if (S.view === 'cast') S.view = 'support';
+    if (!S.cast) {
+      if (S.shade === 'cast') S.shade = 'result';
+      if (S.view === 'cast') S.view = 'support';
+    }
     map.closePopup();
     afterLoad();
   });
@@ -415,7 +417,10 @@
     if (ix && ix[0] === 'ix') S.ix = parseInteractions(d.ix.rows, ix[1], { name: d.ix.name });
     for (const l of d.lists || []) S.lists = { ...S.lists, [l.kind]: listFromRows(l) };
     S.voterNos = d.voterNos ? voterNosFromRows(d.voterNos) : null;
-    S.cast = castSaved();  // a participation report loaded on either map earlier in this tab
+    // participation reports locked into the extra file for the team, plus any loaded on either map earlier in this tab
+    const saved = castSaved();
+    S.cast = d.cast && saved ? mergeCast(d.cast, saved) : d.cast || saved;
+    S.castBuiltIn = d.cast || null;
     if (S.cast) S.shade = 'cast';
     S.builtIn = true;
     afterLoad();
@@ -446,7 +451,7 @@
     $('chooseLabel').classList.toggle('primary', !loaded.length);
     $('clearData').hidden = !loaded.length;
     $('clearData').textContent = S.builtIn && ENC ? 'Lock' : 'Clear';
-    $('castClear').hidden = !cast;
+    $('castClear').hidden = !cast || cast === S.castBuiltIn;
 
     const win = total.ndp + 1;
     let h = '';

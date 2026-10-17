@@ -726,7 +726,7 @@
     $('loaded').hidden = !loaded.length;
     $('loaded').textContent = loaded.length ? `Loaded: ${loaded.join(' · ')}` : '';
     $('lockBtn').hidden = !(S.builtIn && ENC);
-    $('castClear').hidden = !S.cast;
+    $('castClear').hidden = !S.cast || S.cast === S.castBuiltIn;
   }
   // the focus table: polls ranked by focus score, or the party's plan first
   const planRank = r => r.plan ? 0 : 9;  // the plan's polls are all priority, in no set order
@@ -1101,7 +1101,10 @@
     S.calls = d.calls ? { ...callsFromRows(d.calls), src: d.calls } : null;
     S.knocked = d.knocked ? knockedFromRows(d.knocked) : null;
     S.voterNos = d.voterNos ? voterNosFromRows(d.voterNos) : null;
-    S.cast = castSaved();  // a participation report loaded on either map earlier in this tab
+    // participation reports locked into the extra file for the team, plus any loaded on either map earlier in this tab
+    const saved = castSaved();
+    S.cast = d.cast && saved ? mergeCast(d.cast, saved) : d.cast || saved;
+    S.castBuiltIn = d.cast || null;
     if (S.cast) S.fill = 'cast';
     S.builtIn = true;
     afterLoad();
@@ -1125,7 +1128,7 @@
         else if (kind === 't1') S.t1 = parseT1(rows, head, f);
         else if (kind === 'calls') { S.calls = parseCalls(rows, head, f); S.on.add('t2dots'); S.sealable = true; }
         else if (kind === 'knocked') { S.knocked = parseKnocked(rows, head, f); S.sealable = true; }
-        else if (kind === 'cast') { S.cast = mergeCast(S.cast, parseCast(rows, head, f)); castSave(S.cast); S.fill = 'cast'; S.on.add('castDots'); }
+        else if (kind === 'cast') { S.cast = mergeCast(S.cast, parseCast(rows, head, f)); castSave(S.cast); S.fill = 'cast'; S.on.add('castDots'); S.sealable = true; }
         else if (kind === 'voterNos') { S.voterNos = parseVoterNos(rows, head, f); S.sealable = true; }
         else errors.push(`${f.name} isn’t a Poll Summary, Interactions export, 2024 supporter list, T1 list, T2 households, door-knocked houses, voters file or Elections BC participation report.`);
       } catch (x) {
@@ -1144,6 +1147,7 @@
       if (S.knocked?.src) extra.knocked = S.knocked.src;
       if (S.voterNos?.src) extra.voterNos = S.voterNos.src;  // the extra file is replaced whole, so carry the voter numbers over
       if (S.ixSrc) extra.ix = S.ixSrc;  // ...and the canvass answers, when they're newer than the built-in ones
+      if (S.cast) extra.cast = S.cast;  // ...and everyone the participation reports show has voted, so every laptop sees them
       const text = await sealExtra(extra);
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([text], { type: 'text/javascript' }));
@@ -1165,13 +1169,47 @@
     afterLoad();
     lock();
   });
-  $('castClear').addEventListener('click', () => {
-    S.cast = null;
+  $('castClear').addEventListener('click', () => {  // drops reports loaded in this tab; the team's saved ones stay
+    S.cast = S.castBuiltIn || null;
     castSave(null);
-    if (S.fill === 'cast') S.fill = 'now';
+    if (!S.cast && S.fill === 'cast') S.fill = 'now';
     map.closePopup();
     afterLoad();
   });
+
+  // ------------------------------------------------------------------ find an address
+  // Over every house the unlocked data places on the map (lists, T1, calls, knocks, canvass, who voted), in this browser only.
+  // A house number matches the start of the number; the street words match the start of each word, so "98B" and "13418 98" work.
+  const norm = t => String(t || '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
+  function findHouses(q) {
+    const w = norm(q).split(' ').filter(Boolean);
+    if (!w.length) return [];
+    const num = /^\d{3,6}$/.test(w[0]) ? w[0] : null, rest = num ? w.slice(1) : w;
+    const out = [];
+    for (const d of S.doors) {
+      const [n, ...street] = norm(d.civic).split(' ');
+      if (num && !n.startsWith(num)) continue;
+      if (!rest.every(x => street.some(y => y.startsWith(x)))) continue;
+      out.push(d);
+    }
+    return out.sort((a, b) => a.civic.localeCompare(b.civic, 'en', { numeric: true })).slice(0, 8);
+  }
+  function showHouse(d) {
+    $('addrHits').hidden = true;
+    $('addrQ').value = d.civic;
+    if (phone()) setSheet(false);
+    map.setView(d.p, Math.max(map.getZoom(), 18));
+    openHouse(d);
+  }
+  let hits = [];
+  $('addrQ').addEventListener('input', () => {
+    hits = findHouses($('addrQ').value);
+    $('addrHits').innerHTML = hits.length ? hits.map((d, i) => `<li role="option" data-i="${i}"><b>${esc(d.civic)}</b><small>Poll ${esc(d.poll)}${d.units.size ? ` · ${d.units.size} unit${d.units.size > 1 ? 's' : ''}` : ''}</small></li>`).join('')
+      : $('addrQ').value.trim() ? '<li class="none">No house on our lists or reports at that address</li>' : '';
+    $('addrHits').hidden = !$('addrQ').value.trim();
+  });
+  $('addrQ').addEventListener('keydown', e => { if (e.key === 'Enter' && hits[0]) { e.preventDefault(); showHouse(hits[0]); } if (e.key === 'Escape') $('addrHits').hidden = true; });
+  $('addrHits').addEventListener('click', e => { const li = e.target.closest('li[data-i]'); if (li) showHouse(hits[+li.dataset.i]); });
 
   // ------------------------------------------------------------------ theme, phone sheet, start
   function applyTheme() {
@@ -1187,6 +1225,7 @@
   onTheme(applyTheme);
   const setSheet = sheet(app);
   function renderAll() {
+    $('addrFind').hidden = !S.doors.length;
     renderSwitches();
     renderSummary();
     renderTable();
